@@ -15,10 +15,15 @@ const isStandalone = () =>
   typeof window !== 'undefined' &&
   (window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true);
 
+/** iOS Safari exige l'installation sur l'écran d'accueil pour le push. Android/Chrome/desktop n'en ont pas besoin. */
+const isIOS = () =>
+  typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent) && !(window as any).MSStream;
+
 /**
  * Bannière d'activation des notifications.
  * Sur iOS, le push ne fonctionne QUE si la PWA est installée sur l'écran d'accueil :
- * on le dit explicitement plutôt que d'échouer en silence.
+ * on le dit explicitement plutôt que d'échouer en silence. Sur Android et desktop,
+ * l'installation n'est pas requise — la permission peut être demandée directement.
  */
 export default function PushManager() {
   const { profile, refresh } = useApp();
@@ -28,9 +33,9 @@ export default function PushManager() {
   const check = useCallback(async () => {
     if (!profile) return;
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-      setState(isStandalone() ? 'denied' : 'need-install'); return;
+      setState(isIOS() && !isStandalone() ? 'need-install' : 'denied'); return;
     }
-    if (!isStandalone()) { setState('need-install'); return; }
+    if (isIOS() && !isStandalone()) { setState('need-install'); return; }
     if (Notification.permission === 'denied') { setState('denied'); return; }
 
     const reg = await navigator.serviceWorker.ready;
@@ -94,7 +99,9 @@ export default function PushManager() {
         <>
           <p className="text-sm font-bold text-coral">🔕 Notifications bloquées</p>
           <p className="mt-1.5 text-xs leading-relaxed text-white/70">
-            Va dans <b>Réglages iPhone → Notifications → Agenda</b> et autorise-les, sinon aucun rappel n’arrivera.
+            {isIOS()
+              ? <>Va dans <b>Réglages iPhone → Notifications → Agenda</b> et autorise-les, sinon aucun rappel n’arrivera.</>
+              : <>Ouvre les paramètres du site (icône 🔒 ou ⓘ à côté de l’adresse) → <b>Notifications → Autoriser</b>, sinon aucun rappel n’arrivera.</>}
           </p>
         </>
       ) : (
