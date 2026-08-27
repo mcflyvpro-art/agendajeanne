@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+
+html, body {
+  background: #0B0B12;
+  color: #F2F2F7;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  padding-bottom: env(safe-area-inset-bottom);
+  background-image:
+    radial-gradient(1000px 520px at 82% -12%, rgba(124,92,255,.20), transparent 62%),
+    radial-gradient(760px 420px at 8% 4%, rgba(47,216,165,.11), transparent 60%);
+  background-attachment: fixed;
+}
+
+/* Confort iOS : pas de zoom au focus, pas de sélection accidentelle */
+input, select, textarea { font-size: 16px; }
+button, a { -webkit-touch-callout: none; }
+.no-select { -webkit-user-select: none; user-select: none; }
+
+::-webkit-scrollbar { width: 0; height: 0; }
+.scroll-x { overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+
+@layer components {
+  .card {
+    @apply rounded-3xl border border-line/70 bg-surface/80 backdrop-blur-xl;
+    box-shadow: 0 1px 0 rgba(255,255,255,.045) inset, 0 18px 44px -26px rgba(0,0,0,.9);
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 font-semibold
+           transition active:scale-[.97] disabled:opacity-40 disabled:active:scale-100 no-select;
+  }
+  .btn-primary { @apply btn bg-brand text-white shadow-lg shadow-brand/25; }
+  .btn-ghost   { @apply btn bg-raised text-white/85 border border-line; }
+  .btn-soft    { @apply btn bg-white/5 text-white/70 border border-line; }
+  .btn-danger  { @apply btn bg-coral/15 text-coral border border-coral/30; }
+  .btn-mint    { @apply btn bg-mint/15 text-mint border border-mint/30; }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold
+           bg-white/[.06] border border-line text-white/70 no-select whitespace-nowrap;
+  }
+  .field {
+    @apply w-full rounded-2xl bg-raised border border-line px-4 py-3 text-white
+           placeholder:text-muted/70 outline-none focus:border-brand/70 transition;
+  }
+  .label { @apply block text-xs font-semibold uppercase tracking-wider text-muted mb-2; }
+  .sheet { @apply fixed inset-x-0 bottom-0 z-50 max-h-[92vh] overflow-y-auto rounded-t-[28px] border-t border-line bg-surface; }
+}
+
+.tabbar {
+  padding-bottom: calc(env(safe-area-inset-bottom) + .4rem);
+  background: rgba(11,11,18,.82);
+  backdrop-filter: blur(22px) saturate(160%);
+}
+
+/* Anneau de progression du minuteur */
+.ring { transform: rotate(-90deg); transform-origin: 50% 50%; }
+.ring circle { transition: stroke-dashoffset .9s linear; }
+
+.shimmer { position: relative; overflow: hidden; }
+.shimmer::after {
+  content: ''; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.07), transparent);
+  animation: shimmer 1.9s infinite;
+}
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+
+.stagger > * { animation: rise .38s ease-out both; }
+.stagger > *:nth-child(1) { animation-delay: .02s }
+.stagger > *:nth-child(2) { animation-delay: .06s }
+.stagger > *:nth-child(3) { animation-delay: .10s }
+.stagger > *:nth-child(4) { animation-delay: .14s }
+.stagger > *:nth-child(5) { animation-delay: .18s }
+.stagger > *:nth-child(6) { animation-delay: .22s }
+.stagger > *:nth-child(7) { animation-delay: .26s }
+.stagger > *:nth-child(8) { animation-delay: .30s }
+@keyframes rise { from { opacity: 0; transform: translateY(12px) } to { opacity: 1; transform: none } }

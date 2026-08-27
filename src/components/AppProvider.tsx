@@ -1,0 +1,106 @@
+'use client';
+import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import type { Session } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabase';
+import type { Profile, Settings, Subject } from '@/lib/types';
+
+interface Ctx {
+  session: Session | null;
+  profile: Profile | null;
+  child: Profile | null;
+  settings: Settings | null;
+  subjects: Subject[];
+  loading: boolean;
+  isParent: boolean;
+  refresh: () => Promise<void>;
+  refreshChild: () => Promise<void>;
+  signOut: () => Promise<void>;
+}
+
+const AppCtx = createContext<Ctx>(null as any);
+export const useApp = () => useContext(AppCtx);
+
+export function AppProvider({ children }: { children: React.ReactNode }) {
+  const [session, setSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [child, setChild] = useState<Profile | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadAll = useCallback(async (uid: string) => {
+    const [p, s, subj] = await Promise.all([
+      supabase.from('profiles').select('*').eq('id', uid).maybeSingle(),
+      supabase.from('settings').select('*').eq('id', 1).maybeSingle(),
+      supabase.from('subjects').select('*').eq('active', true).order('position'),
+    ]);
+    setProfile((p.data as Profile) ?? null);
+    setSettings((s.data as Settings) ?? null);
+    setSubjects((subj.data as Subject[]) ?? []);
+
+    const childId = (s.data as Settings | null)?.child_id;
+    if ((p.data as Profile)?.role === 'child') {
+      setChild(p.data as Profile);
+    } else if (childId) {
+      const c = await supabase.from('profiles').select('*').eq('id', childId).maybeSingle();
+      setChild((c.data as Profile) ?? null);
+    } else {
+      const c = await supabase.from('profiles').select('*').eq('role', 'child').limit(1).maybeSingle();
+      setChild((c.data as Profile) ?? null);
+    }
+  }, []);
+
+  const refresh = useCallback(async () => {
+    if (session?.user?.id) await loadAll(session.user.id);
+  }, [session, loadAll]);
+
+  const refreshChild = useCallback(async () => {
+    if (!child) return;
+    const c = await supabase.from('profiles').select('*').eq('id', child.id).maybeSingle();
+    if (c.data) {
+      setChild(c.data as Profile);
+      if (profile?.id === child.id) setProfile(c.data as Profile);
+    }
+  }, [child, profile]);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(async ({ data }) => {
+      setSession(data.session);
+      if (data.session?.user?.id) await loadAll(data.session.user.id);
+      setLoading(false);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange(async (_e, s) => {
+      setSession(s);
+      if (s?.user?.id) await loadAll(s.user.id);
+      else { setProfile(null); setChild(null); }
+    });
+    return () => sub.subscription.unsubscribe();
+  }, [loadAll]);
+
+  // Ping de présence — le parent voit si l'app a été ouverte récemment.
+  useEffect(() => {
+    if (!profile) return;
+    const ping = () => { supabase.from('profiles').update({ last_seen_at: new Date().toISOString() }).eq('id', profile.id).then(() => {}); };
+    ping();
+    const t = setInterval(ping, 4 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [profile?.id]);
+
+  // Enregistrement du service worker (indispensable aux notifications iOS)
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  }, []);
+
+  const signOut = useCallback(async () => { await supabase.auth.signOut(); location.href = '/login'; }, []);
+
+  return (
+    <AppCtx.Provider value={{
+      session, profile, child, settings, subjects, loading,
+      isParent: profile?.role === 'parent', refresh, refreshChild, signOut,
+    }}>
+      {children}
+    </AppCtx.Provider>
+  );
+}
