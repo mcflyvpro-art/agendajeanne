@@ -93,6 +93,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  /**
+   * Le parent doit se reconnecter à chaque utilisation (il valide de l'argent
+   * de poche et des récompenses). L'enfant, elle, reste connectée à vie —
+   * comportement par défaut de Supabase, rien à faire de ce côté.
+   */
+  useEffect(() => {
+    if (profile?.role !== 'parent') return;
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') supabase.auth.signOut({ scope: 'local' });
+    };
+    document.addEventListener('visibilitychange', onHide);
+    return () => document.removeEventListener('visibilitychange', onHide);
+  }, [profile?.role]);
+
   const signOut = useCallback(async () => { await supabase.auth.signOut(); location.href = '/login'; }, []);
 
   return (
