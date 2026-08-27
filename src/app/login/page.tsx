@@ -53,7 +53,7 @@ export default function Login() {
 
         <p className="mt-6 px-4 text-center text-xs leading-relaxed text-muted">
           Pour recevoir les rappels, ajoute l’app à ton écran d’accueil :<br />
-          <span className="text-white/70">Partager <span className="text-base">􀈂</span> → « Sur l’écran d’accueil »</span>
+          <span className="text-white/70">bouton Partager de Safari → « Sur l’écran d’accueil »</span>
         </p>
       </div>
     </main>
