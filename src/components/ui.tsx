@@ -146,6 +146,49 @@ export function Stat({ value, label, emoji, color }: {
   );
 }
 
+/**
+ * Champ numérique libre. Un champ contrôlé qui recopie `Number(valeur) || 0`
+ * force un « 0 » visible dès que l'utilisateur vide le champ, ce qui décale
+ * le curseur en pleine saisie. Ici, la valeur tapée reste un texte libre tant
+ * que le champ a le focus ; elle n'est validée (et l'erreur éventuelle
+ * affichée) qu'à la sortie du champ.
+ */
+export function NumberField({ value, onChange, suffix, min = 0, placeholder, className }: {
+  value: number; onChange: (n: number) => void; suffix?: string; min?: number;
+  placeholder?: string; className?: string;
+}) {
+  const [raw, setRaw] = useState(String(value));
+  const [focused, setFocused] = useState(false);
+  const [empty, setEmpty] = useState(false);
+
+  useEffect(() => { if (!focused) setRaw(String(value)); }, [value, focused]);
+
+  return (
+    <div>
+      <div className="flex items-center gap-2">
+        <input
+          type="number" inputMode="numeric" placeholder={placeholder}
+          className={clsx('field flex-1', empty && '!border-flame', className)}
+          value={raw}
+          onFocus={() => setFocused(true)}
+          onChange={(e) => {
+            setRaw(e.target.value);
+            setEmpty(false);
+            if (e.target.value.trim() !== '') onChange(Number(e.target.value) || 0);
+          }}
+          onBlur={() => {
+            setFocused(false);
+            if (raw.trim() === '') { setEmpty(true); setRaw(String(min)); onChange(min); }
+            else { const n = Number(raw); setRaw(String(n)); onChange(n); }
+          }}
+        />
+        {suffix && <span className="shrink-0 text-lg font-black text-muted">{suffix}</span>}
+      </div>
+      {empty && <p className="mt-1.5 text-xs font-bold text-flame">Indique une valeur</p>}
+    </div>
+  );
+}
+
 export function Toggle({ checked, onChange, label, emoji }: {
   checked: boolean; onChange: (v: boolean) => void; label: string; emoji?: string;
 }) {

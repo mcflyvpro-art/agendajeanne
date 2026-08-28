@@ -11,7 +11,7 @@ import { todayISO, addDaysISO, weekStart, dayShort, dowOf, hhmm, longDate, human
 import { suggestCoins } from '@/lib/economy';
 import { notify } from '@/lib/actions';
 import Help from '@/components/Help';
-import { Loader, Sheet, Empty, SegmentedTabs, toast } from '@/components/ui';
+import { Loader, Sheet, Empty, SegmentedTabs, NumberField, toast } from '@/components/ui';
 import type { Task, Routine } from '@/lib/types';
 
 export default function AgendaPage() { return <ParentShell><Agenda /></ParentShell>; }
@@ -240,8 +240,7 @@ function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string
             </div>
             <div>
               <label className="label">Durée</label>
-              <input type="number" min={5} step={5} className="field" value={d.duration_min}
-                     onChange={(e) => set('duration_min', Math.max(5, Number(e.target.value) || 5))} />
+              <NumberField value={d.duration_min} min={5} onChange={(n) => set('duration_min', Math.max(5, n))} />
             </div>
           </div>
 
@@ -268,8 +267,9 @@ function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string
           <div>
             <label className="label">Valeur</label>
             <div className="flex gap-2">
-              <input type="number" className="field flex-1" value={coins} disabled={d.coinsAuto}
-                     onChange={(e) => set('coins', Number(e.target.value) || 0)} />
+              {d.coinsAuto
+                ? <input className="field flex-1" value={coins} disabled />
+                : <NumberField value={coins} min={0} onChange={(n) => set('coins', n)} />}
               <button onClick={() => setD((x) => ({ ...x, coinsAuto: !x.coinsAuto, coins: auto }))}
                       className={clsx('chip !px-4', d.coinsAuto && '!border-grape !bg-grape-light !text-grape')}>
                 {d.coinsAuto ? 'Auto' : 'Manuel'}
@@ -454,7 +454,7 @@ function RoutinesSheet({ open, onClose, onGenerated }: { open: boolean; onClose:
           </div>
           <div className="grid grid-cols-2 gap-3">
             <input type="time" className="field" value={form.start_time ?? '09:00'} onChange={(e) => setForm({ ...form, start_time: e.target.value })} />
-            <input type="number" className="field" value={form.duration_min ?? 45} onChange={(e) => setForm({ ...form, duration_min: Number(e.target.value) })} />
+            <NumberField value={form.duration_min ?? 45} min={5} onChange={(n) => setForm({ ...form, duration_min: n })} />
           </div>
           <div className="flex gap-2.5">
             <button onClick={() => setForm(null)} className="btn-plain flex-1">Annuler</button>

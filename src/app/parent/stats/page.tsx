@@ -8,7 +8,10 @@ import { supabase } from '@/lib/supabase';
 import { useLive } from '@/lib/useLive';
 import { todayISO, addDaysISO, dayShort, dowOf } from '@/lib/dates';
 import { moodEmoji } from '@/lib/mood';
-import { Loader, Stat, Bar, Empty, SegmentedTabs } from '@/components/ui';
+import { Loader, Stat, Bar, Empty, SegmentedTabs, Sheet, NumberField, toast } from '@/components/ui';
+import { compressImage } from '@/lib/image';
+import { notify } from '@/lib/actions';
+import { Trash2, Plus, Camera, Sparkles } from 'lucide-react';
 import type { Task, Mood, Quiz, QuizAttempt, QuizQuestion } from '@/lib/types';
 
 export default function StatsPage() { return <ParentShell><Suivi /></ParentShell>; }
@@ -174,6 +177,7 @@ function QuizReview() {
   const { child } = useApp();
   const [list, setList] = useState<(Quiz & { attempts: QuizAttempt[] })[]>([]);
   const [open, setOpen] = useState<(Quiz & { attempts: QuizAttempt[] }) | null>(null);
+  const [create, setCreate] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -192,48 +196,80 @@ function QuizReview() {
   useEffect(() => { load(); }, [load]);
   useLive(['quizzes', 'quiz_attempts'], load, 'stats-quiz');
 
-  if (loading) return <Loader />;
-  if (open) return <QuizDetail quiz={open} onBack={() => setOpen(null)} />;
-  if (!list.length) return <div className="mt-5"><Empty emoji="🧠" title="Aucun quiz" /></div>;
+  if (open) return <QuizDetail quiz={open} onBack={() => setOpen(null)} onDeleted={() => { setOpen(null); load(); }} />;
 
   return (
-    <ul className="stagger mt-5 space-y-3">
-      {list.map((q) => {
-        const best = Math.max(0, ...q.attempts.map((a) => (a.total ? Math.round((a.score / a.total) * 100) : 0)));
-        const last = q.attempts[0];
-        return (
-          <li key={q.id}>
-            <button onClick={() => setOpen(q)} className="card w-full p-4 text-left no-select active:scale-[.99]">
-              <div className="flex items-center gap-3">
-                <span className="text-3xl">📘</span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-extrabold text-ink">{q.title}</p>
-                  <p className="text-xs font-bold text-muted">
-                    {q.attempts.length} tentative{q.attempts.length > 1 ? 's' : ''}
-                    {last && ` · dernière ${new Date(last.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}`}
-                  </p>
-                </div>
-                {q.attempts.length > 0 && (
-                  <span className={clsx('shrink-0 text-lg font-black',
-                    best >= 70 ? 'text-leaf' : best >= 40 ? 'text-sun-dark' : 'text-flame')}>{best}%</span>
-                )}
-              </div>
-            </button>
-          </li>
-        );
-      })}
-    </ul>
+    <div className="mt-5">
+      <button onClick={() => setCreate(true)} className="btn-grape btn-lg w-full">
+        <Plus size={20} /> Créer un quiz
+      </button>
+
+      {loading ? <Loader /> : !list.length ? (
+        <div className="mt-5"><Empty emoji="🧠" title="Aucun quiz" /></div>
+      ) : (
+        <ul className="stagger mt-5 space-y-3">
+          {list.map((q) => {
+            const best = Math.max(0, ...q.attempts.map((a) => (a.total ? Math.round((a.score / a.total) * 100) : 0)));
+            const last = q.attempts[0];
+            return (
+              <li key={q.id}>
+                <button onClick={() => setOpen(q)} className="card w-full p-4 text-left no-select active:scale-[.99]">
+                  <div className="flex items-center gap-3">
+                    <span className="text-3xl">{q.source === 'parent' ? '👪' : '📘'}</span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-extrabold text-ink">{q.title}</p>
+                      <p className="text-xs font-bold text-muted">
+                        {q.attempts.length} tentative{q.attempts.length > 1 ? 's' : ''}
+                        {last && ` · dernière ${new Date(last.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}`}
+                      </p>
+                    </div>
+                    {q.attempts.length > 0 && (
+                      <span className={clsx('shrink-0 text-lg font-black',
+                        best >= 70 ? 'text-leaf' : best >= 40 ? 'text-sun-dark' : 'text-flame')}>{best}%</span>
+                    )}
+                  </div>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <QuizCreator open={create} onClose={() => setCreate(false)} onSent={load} />
+    </div>
   );
 }
 
-function QuizDetail({ quiz, onBack }: { quiz: Quiz & { attempts: QuizAttempt[] }; onBack: () => void }) {
+function QuizDetail({ quiz, onBack, onDeleted }: {
+  quiz: Quiz & { attempts: QuizAttempt[] }; onBack: () => void; onDeleted: () => void;
+}) {
   const qs = quiz.questions as QuizQuestion[];
   const [sel, setSel] = useState<QuizAttempt | null>(quiz.attempts[0] ?? null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const chrono = [...quiz.attempts].reverse();
+
+  const del = async () => {
+    await supabase.from('quizzes').delete().eq('id', quiz.id);
+    toast('Quiz supprimé');
+    onDeleted();
+  };
 
   return (
     <div className="mt-5 space-y-5">
-      <button onClick={onBack} className="chip"><ChevronLeft size={14} /> Retour</button>
+      <div className="flex items-center justify-between">
+        <button onClick={onBack} className="chip"><ChevronLeft size={14} /> Retour</button>
+        {confirmDelete ? (
+          <div className="flex gap-2">
+            <button onClick={() => setConfirmDelete(false)} className="chip">Annuler</button>
+            <button onClick={del} className="chip !border-flame !bg-flame-light !text-flame-dark">Confirmer</button>
+          </div>
+        ) : (
+          <button onClick={() => setConfirmDelete(true)}
+                  className="grid h-9 w-9 place-items-center rounded-full bg-flame-light text-flame-dark no-select active:scale-90">
+            <Trash2 size={16} />
+          </button>
+        )}
+      </div>
       <h2 className="text-2xl font-black text-ink">{quiz.title}</h2>
 
       {chrono.length > 0 && (
@@ -306,5 +342,131 @@ function QuizDetail({ quiz, onBack }: { quiz: Quiz & { attempts: QuizAttempt[] }
         </>
       )}
     </div>
+  );
+}
+
+/* ------------------------------------------------------ créer un quiz --- */
+type Draft = { title: string; subject: string; questions: QuizQuestion[] };
+
+function QuizCreator({ open, onClose, onSent }: { open: boolean; onClose: () => void; onSent: () => void }) {
+  const { profile, child } = useApp();
+  const [nQuestions, setNQuestions] = useState(10);
+  const [nChoices, setNChoices] = useState(4);
+  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState<Draft | null>(null);
+
+  const reset = () => { setDraft(null); setBusy(false); };
+  const close = () => { reset(); onClose(); };
+
+  const generate = async (file: File) => {
+    setBusy(true);
+    try {
+      const { base64, mime } = await compressImage(file);
+      const { data: sess } = await supabase.auth.getSession();
+      const r = await fetch('/api/ai/quiz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sess.session?.access_token ?? ''}` },
+        body: JSON.stringify({ image: base64, mime, questions: nQuestions, choices: nChoices }),
+      });
+      const raw = await r.text();
+      let json: any;
+      try { json = JSON.parse(raw); } catch { throw new Error('Réessaie'); }
+      if (!r.ok) throw new Error(json.error ?? 'Échec de la génération');
+      setDraft({ title: json.title, subject: json.subject ?? '', questions: json.questions });
+    } catch (e: any) { toast(e.message, 'err'); }
+    finally { setBusy(false); }
+  };
+
+  const send = async () => {
+    if (!draft || !child || !profile) return;
+    setBusy(true);
+    try {
+      await supabase.from('quizzes').insert({
+        child_id: child.id, title: draft.title.trim() || 'Quiz', subject: draft.subject || null,
+        questions: draft.questions, source: 'parent', assigned_by: profile.id,
+      });
+      await notify('quiz_assigned', { title: draft.title });
+      toast('Envoyé à ' + child.display_name);
+      close(); onSent();
+    } catch (e: any) { toast(e.message, 'err'); }
+    finally { setBusy(false); }
+  };
+
+  const setQ = (i: number, patch: Partial<QuizQuestion>) => {
+    if (!draft) return;
+    setDraft({ ...draft, questions: draft.questions.map((q, k) => (k === i ? { ...q, ...patch } : q)) });
+  };
+  const setChoice = (qi: number, ci: number, text: string) => {
+    if (!draft) return;
+    const questions = draft.questions.map((q, k) => {
+      if (k !== qi) return q;
+      const choices = q.choices.map((c, j) => (j === ci ? text : c));
+      return { ...q, choices };
+    });
+    setDraft({ ...draft, questions });
+  };
+  const removeQ = (i: number) => {
+    if (!draft) return;
+    setDraft({ ...draft, questions: draft.questions.filter((_, k) => k !== i) });
+  };
+
+  return (
+    <Sheet open={open} onClose={close} title={draft ? 'Relire le quiz' : 'Créer un quiz'}
+           footer={draft ? (
+             <button onClick={send} disabled={busy || !draft.questions.length} className="btn-grape btn-lg w-full">
+               {busy ? '…' : `Envoyer à ${child?.display_name ?? "l'enfant"}`}
+             </button>
+           ) : undefined}>
+      {!draft ? (
+        <div className="space-y-5">
+          <div>
+            <label className="label">Nombre de questions</label>
+            <NumberField value={nQuestions} min={3} onChange={setNQuestions} />
+          </div>
+          <div>
+            <label className="label">Propositions par question</label>
+            <NumberField value={nChoices} min={2} onChange={setNChoices} />
+          </div>
+
+          <label className={clsx('flex min-h-[160px] cursor-pointer flex-col items-center justify-center gap-3 rounded-4xl border-[3px] border-dashed border-grape bg-grape-light p-4 text-center',
+            busy && 'pointer-events-none opacity-60')}>
+            {busy ? (
+              <><Sparkles className="animate-bob" size={34} /><span className="font-extrabold text-grape">Lecture de la photo…</span></>
+            ) : (
+              <><Camera size={34} className="text-grape" /><span className="font-extrabold text-grape">Photographier la leçon</span></>
+            )}
+            <input type="file" accept="image/*" capture="environment" className="hidden" disabled={busy}
+                   onChange={(e) => { const f = e.target.files?.[0]; if (f) generate(f); e.target.value = ''; }} />
+          </label>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <input className="field" value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="Titre du quiz" />
+
+          {draft.questions.map((q, i) => (
+            <div key={i} className="card space-y-2.5 p-4">
+              <div className="flex items-start gap-2">
+                <textarea className="field flex-1 !py-2.5 text-sm" value={q.q}
+                          onChange={(e) => setQ(i, { q: e.target.value })} rows={2} />
+                <button onClick={() => removeQ(i)}
+                        className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-flame-light text-flame-dark no-select active:scale-90">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              {q.choices.map((c, ci) => (
+                <label key={ci} className={clsx('flex items-center gap-2.5 rounded-2xl border-2 px-3 py-2 no-select',
+                  q.answer === ci ? 'border-leaf bg-leaf-light' : 'border-line bg-card')}>
+                  <input type="radio" checked={q.answer === ci} onChange={() => setQ(i, { answer: ci })}
+                         className="h-4 w-4 shrink-0 accent-leaf" />
+                  <input className="flex-1 bg-transparent text-sm font-bold text-ink outline-none"
+                         value={c} onChange={(e) => setChoice(i, ci, e.target.value)} />
+                </label>
+              ))}
+            </div>
+          ))}
+          {!draft.questions.length && <Empty emoji="🗑️" title="Plus aucune question" />}
+        </div>
+      )}
+    </Sheet>
   );
 }

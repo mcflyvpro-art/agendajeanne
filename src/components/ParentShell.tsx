@@ -7,6 +7,7 @@ import { LayoutDashboard, CalendarRange, Gift, BarChart3, SlidersHorizontal } fr
 import { useApp } from '@/components/AppProvider';
 import { Loader, Toaster } from '@/components/ui';
 import LoadFailure from '@/components/LoadFailure';
+import { useSwipeTabs } from '@/lib/useSwipeTabs';
 
 const TABS = [
   { href: '/parent',          label: 'Bord',    Icon: LayoutDashboard },
@@ -27,11 +28,13 @@ export default function ParentShell({ children }: { children: React.ReactNode })
     else if (profile?.role === 'child') router.replace('/now');
   }, [session, profile, ready, loadError, router]);
 
+  const swipe = useSwipeTabs(TABS);
+
   if (loadError) return <LoadFailure message={loadError} />;
   if (!ready || !profile) return <Loader />;
 
   return (
-    <div className="min-h-dvh pb-28">
+    <div className="min-h-dvh pb-28" onTouchStart={swipe.onTouchStart} onTouchEnd={swipe.onTouchEnd}>
       <Toaster />
       {children}
       <nav className="tabbar fixed inset-x-0 bottom-0 z-40">

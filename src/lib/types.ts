@@ -57,6 +57,7 @@ export interface Settings {
   level_up_coins: number;
   daily_xp_goal: number;
   mood_per_day: number;
+  child_can_create_quiz: boolean;
   calib_tasks_per_day: number;
   calib_weekly_target: number;
   notif_parent: Record<ParentNotifKind, boolean>;
@@ -68,8 +69,8 @@ export type ParentNotifKind =
   | 'level_up' | 'blocked' | 'mood' | 'not_started' | 'recap';
 
 export type ChildNotifKind =
-  | 'task_created' | 'kudos' | 'reward_created' | 'contract_created'
-  | 'reminders' | 'validation' | 'level_up';
+  | 'task_created' | 'kudos' | 'message' | 'reward_created' | 'contract_created'
+  | 'reminders' | 'validation' | 'level_up' | 'quiz_assigned';
 
 export interface Subject { id: string; name: string; emoji: string; color: string; position: number; active: boolean; }
 
@@ -184,6 +185,8 @@ export interface QuizQuestion {
 export interface Quiz {
   id: string; child_id: string; task_id: string | null; title: string;
   subject: string | null; source_url: string | null; questions: QuizQuestion[]; created_at: string;
+  source: 'child' | 'parent';
+  assigned_by: string | null;
 }
 export interface QuizAttempt {
   id: string; quiz_id: string; child_id: string; answers: number[];

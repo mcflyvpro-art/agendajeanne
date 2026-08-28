@@ -20,15 +20,28 @@ function QuizHome() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  const [attempted, setAttempted] = useState<Set<string>>(new Set());
+
   const load = useCallback(async () => {
     if (!profile) return;
-    const { data } = await supabase.from('quizzes').select('*').eq('child_id', profile.id)
-      .order('created_at', { ascending: false }).limit(30);
-    setList((data ?? []) as Quiz[]);
+    const [q, a] = await Promise.all([
+      supabase.from('quizzes').select('*').eq('child_id', profile.id).order('created_at', { ascending: false }).limit(30),
+      supabase.from('quiz_attempts').select('quiz_id').eq('child_id', profile.id),
+    ]);
+    const rows = (q.data ?? []) as Quiz[];
+    const attemptedSet = new Set((a.data ?? []).map((r: any) => r.quiz_id));
+    // Ceux envoyés par les parents et jamais faits remontent en premier.
+    rows.sort((x, y) => {
+      const px = x.source === 'parent' && !attemptedSet.has(x.id) ? 0 : 1;
+      const py = y.source === 'parent' && !attemptedSet.has(y.id) ? 0 : 1;
+      return px - py;
+    });
+    setAttempted(attemptedSet);
+    setList(rows);
     setLoading(false);
   }, [profile?.id]);
   useEffect(() => { load(); }, [load]);
-  useLive(['quizzes'], load, 'child-quiz');
+  useLive(['quizzes', 'quiz_attempts'], load, 'child-quiz');
 
   const create = async (file: File) => {
     setBusy(true);
@@ -63,13 +76,15 @@ function QuizHome() {
     <main className="mx-auto max-w-lg px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
       <h1 className="text-3xl font-black text-ink">Quiz 🧠</h1>
 
-      <label className={clsx('card mt-5 flex cursor-pointer flex-col items-center gap-3 border-[3px] border-dashed border-grape bg-grape-light px-6 py-10 text-center no-select',
-        busy && 'pointer-events-none opacity-60')}>
-        <span className={clsx('text-6xl', busy ? 'animate-bob' : '')}>{busy ? '✨' : '📸'}</span>
-        <span className="text-xl font-black text-grape">{busy ? 'Lecture…' : 'Photographier ma leçon'}</span>
-        <input type="file" accept="image/*" capture="environment" className="hidden" disabled={busy}
-               onChange={(e) => { const f = e.target.files?.[0]; if (f) create(f); e.target.value = ''; }} />
-      </label>
+      {settings.child_can_create_quiz && (
+        <label className={clsx('card mt-5 flex cursor-pointer flex-col items-center gap-3 border-[3px] border-dashed border-grape bg-grape-light px-6 py-10 text-center no-select',
+          busy && 'pointer-events-none opacity-60')}>
+          <span className={clsx('text-6xl', busy ? 'animate-bob' : '')}>{busy ? '✨' : '📸'}</span>
+          <span className="text-xl font-black text-grape">{busy ? 'Lecture…' : 'Photographier ma leçon'}</span>
+          <input type="file" accept="image/*" capture="environment" className="hidden" disabled={busy}
+                 onChange={(e) => { const f = e.target.files?.[0]; if (f) create(f); e.target.value = ''; }} />
+        </label>
+      )}
 
       {list.length === 0 ? (
         <div className="mt-6"><Empty emoji="📚" title="Aucun quiz" /></div>
@@ -78,10 +93,13 @@ function QuizHome() {
           {list.map((q) => (
             <li key={q.id}>
               <button onClick={() => setActive(q)} className="card flex w-full items-center gap-3 p-4 text-left no-select active:scale-[.98]">
-                <span className="text-3xl">📘</span>
+                <span className="text-3xl">{q.source === 'parent' ? '👪' : '📘'}</span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-extrabold text-ink">{q.title}</p>
-                  <p className="text-xs font-bold text-muted">{(q.questions as QuizQuestion[]).length} questions</p>
+                  <p className="text-xs font-bold text-muted">
+                    {(q.questions as QuizQuestion[]).length} questions
+                    {q.source === 'parent' && !attempted.has(q.id) && ' · nouveau'}
+                  </p>
                 </div>
                 <span className="text-2xl">▶️</span>
               </button>

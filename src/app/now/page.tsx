@@ -50,6 +50,7 @@ function Now() {
       <div className="mt-5 space-y-4">
         <PushManager />
         <MoodRow />
+        <AssignedQuizCard />
         {current ? (
           current.status === 'doing'
             ? <Focus task={current} onDone={onDone} />
@@ -108,6 +109,36 @@ function Header({ xp, prog }: { xp: number; prog: { done: number; total: number;
         </div>
       </div>
     </header>
+  );
+}
+
+/* -------------------------------------------------------- quiz des parents */
+function AssignedQuizCard() {
+  const { profile } = useApp();
+  const [quiz, setQuiz] = useState<{ id: string; title: string } | null>(null);
+
+  useEffect(() => {
+    if (!profile) return;
+    (async () => {
+      const [{ data: quizzes }, { data: attempts }] = await Promise.all([
+        supabase.from('quizzes').select('id,title').eq('child_id', profile.id).eq('source', 'parent').order('created_at', { ascending: false }),
+        supabase.from('quiz_attempts').select('quiz_id').eq('child_id', profile.id),
+      ]);
+      const done = new Set((attempts ?? []).map((a: any) => a.quiz_id));
+      setQuiz((quizzes ?? []).find((q: any) => !done.has(q.id)) ?? null);
+    })();
+  }, [profile?.id]);
+
+  if (!quiz) return null;
+  return (
+    <Link href="/quiz" className="card flex items-center gap-3 border-2 border-grape bg-grape-light p-4 no-select active:scale-[.99]">
+      <span className="animate-bob text-3xl">🧠</span>
+      <div className="min-w-0 flex-1">
+        <p className="font-black text-grape">Nouveau quiz de tes parents</p>
+        <p className="truncate text-sm font-bold text-ink">{quiz.title}</p>
+      </div>
+      <span className="text-2xl">▶️</span>
+    </Link>
   );
 }
 

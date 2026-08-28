@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import clsx from 'clsx';
 import ParentShell from '@/components/ParentShell';
@@ -13,7 +13,7 @@ import { progressOf, computeAward, levelOf, xpToday } from '@/lib/economy';
 import { settleDay, adjustBalance, elapsedOf, notify } from '@/lib/actions';
 import { KUDOS } from '@/lib/tone';
 import { moodEmoji } from '@/lib/mood';
-import { Loader, Bar, Stat, Sheet, Empty, toast } from '@/components/ui';
+import { Loader, Bar, Stat, Sheet, Empty, NumberField, toast } from '@/components/ui';
 import type { Task, Redemption, Message, Mood } from '@/lib/types';
 
 export default function ParentHome() { return <ParentShell><Dashboard /></ParentShell>; }
@@ -27,17 +27,22 @@ function Dashboard() {
   const [mood, setMood] = useState<Mood | null>(null);
   const [kudos, setKudos] = useState(false);
   const [wallet, setWallet] = useState(false);
+  const [mailbox, setMailbox] = useState(false);
+  const [mailboxKey, setMailboxKey] = useState(0);
 
   const load = async () => {
     if (!child || !profile) return;
     const [r, m, mo] = await Promise.all([
       supabase.from('redemptions').select('*').eq('child_id', child.id).eq('status', 'pending').order('created_at'),
       supabase.from('messages').select('*').eq('to_id', profile.id).is('read_at', null).order('created_at', { ascending: false }).limit(6),
-      supabase.from('moods').select('*').eq('child_id', child.id).eq('day', today).maybeSingle(),
+      // Plusieurs humeurs par jour sont possibles depuis v3 : .maybeSingle() échouait
+      // dès qu'il y en avait plus d'une, et l'emoji n'apparaissait plus jamais.
+      supabase.from('moods').select('*').eq('child_id', child.id).eq('day', today)
+        .order('created_at', { ascending: false }).limit(1),
     ]);
     setPending((r.data ?? []) as Redemption[]);
     setMsgs((m.data ?? []) as Message[]);
-    setMood((mo.data as Mood) ?? null);
+    setMood(((mo.data as Mood[]) ?? [])[0] ?? null);
   };
   useEffect(() => { load(); }, [child?.id, profile?.id]);
 
@@ -211,9 +216,13 @@ function Dashboard() {
         <button onClick={() => setKudos(true)} className="btn-rose flex-1">💜 Encourager</button>
         <Link href="/parent/agenda" className="btn-grape flex-1">➕ Tâche</Link>
       </div>
+      <button onClick={() => setMailbox(true)} className="btn-plain w-full">✉️ Envoyer un message</button>
+
+      <Mailbox childId={child.id} refreshKey={mailboxKey} />
 
       <KudosSheet open={kudos} onClose={() => setKudos(false)} />
       <WalletSheet open={wallet} onClose={() => setWallet(false)} />
+      <MessageSheet open={mailbox} onClose={() => setMailbox(false)} onSent={() => setMailboxKey((k) => k + 1)} />
     </main>
   );
 }
@@ -254,16 +263,16 @@ function Presence({ doing }: { doing?: Task }) {
 /* --------------------------------------------------------------- solde --- */
 function WalletSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { child, settings, refreshChild } = useApp();
-  const [amount, setAmount] = useState('');
+  const [amount, setAmount] = useState(0);
   const [reason, setReason] = useState('');
   if (!child || !settings) return null;
 
   const apply = async (sign: number) => {
-    const n = Math.abs(parseInt(amount, 10) || 0);
-    if (!n) return;
+    const n = Math.abs(amount);
+    if (!n) { toast('Indique un montant', 'err'); return; }
     await adjustBalance(child, sign * n, reason);
     await refreshChild();
-    setAmount(''); setReason(''); onClose();
+    setAmount(0); setReason(''); onClose();
     toast(`${sign > 0 ? '+' : '−'}${n} ${settings.currency_emoji}`);
   };
 
@@ -274,11 +283,10 @@ function WalletSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
         <p className="mt-1 font-extrabold text-muted">{settings.currency_name}</p>
       </div>
       <div className="mt-5 space-y-3">
-        <input className="field text-center text-2xl" type="number" inputMode="numeric" value={amount}
-               onChange={(e) => setAmount(e.target.value)} placeholder="0" />
+        <NumberField value={amount} min={0} onChange={setAmount} className="text-center text-2xl" />
         <div className="flex flex-wrap justify-center gap-2">
           {[10, 25, 50, 100, 250].map((n) => (
-            <button key={n} onClick={() => setAmount(String(n))} className="chip">{n}</button>
+            <button key={n} onClick={() => setAmount(n)} className="chip">{n}</button>
           ))}
         </div>
         <input className="field" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Motif (facultatif)" />
@@ -330,5 +338,70 @@ function KudosSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
         </button>
       </div>
     </Sheet>
+  );
+}
+
+/* ------------------------------------------------------------ boîte aux lettres */
+function MessageSheet({ open, onClose, onSent }: { open: boolean; onClose: () => void; onSent: () => void }) {
+  const { profile, child } = useApp();
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const send = async () => {
+    if (!profile || !child || !text.trim()) return;
+    setBusy(true);
+    try {
+      await supabase.from('messages').insert({ from_id: profile.id, to_id: child.id, kind: 'message', body: text.trim(), emoji: '✉️' });
+      await notify('message', { body: text.trim() });
+      setText(''); onClose(); onSent();
+      toast('Message envoyé');
+    } catch { toast('Non envoyé', 'err'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Sheet open={open} onClose={onClose} title="Envoyer un message"
+           footer={<button onClick={send} disabled={busy || !text.trim()} className="btn-grape btn-lg w-full">Envoyer</button>}>
+      <textarea className="field min-h-[140px]" value={text} onChange={(e) => setText(e.target.value)}
+                placeholder="Écris ton message…" autoFocus />
+    </Sheet>
+  );
+}
+
+/** Historique des messages envoyés, avec accusé de lecture. */
+function Mailbox({ childId, refreshKey }: { childId: string; refreshKey: number }) {
+  const [sent, setSent] = useState<Message[]>([]);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('messages').select('*')
+      .eq('to_id', childId).eq('kind', 'message').order('created_at', { ascending: false }).limit(10);
+    setSent((data ?? []) as Message[]);
+  }, [childId]);
+
+  useEffect(() => { load(); }, [load, refreshKey]);
+  useLive(['messages'], load, 'parent-mailbox');
+
+  if (!sent.length) return null;
+
+  return (
+    <section>
+      <p className="mb-3 text-lg font-black text-ink">📬 Mes envois</p>
+      <ul className="space-y-2.5">
+        {sent.map((m) => (
+          <li key={m.id} className="card flex items-start gap-3 p-3.5">
+            <span className="text-2xl">✉️</span>
+            <div className="min-w-0 flex-1">
+              <p className="font-bold text-ink">{m.body}</p>
+              <p className="mt-0.5 text-xs font-bold text-muted">
+                {new Date(m.created_at).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+              </p>
+            </div>
+            <span className={clsx('shrink-0 text-xs font-black', m.read_at ? 'text-leaf' : 'text-muted')}>
+              {m.read_at ? '✓✓ Lu' : '✓ Envoyé'}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

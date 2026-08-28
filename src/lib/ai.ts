@@ -1,22 +1,26 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { QuizQuestion } from './types';
 
-const SYSTEM = `Tu es un professeur de collège français qui prépare des élèves de 3e au Brevet.
+function buildSystem(nQuestions: number, nChoices: number): string {
+  return `Tu es un professeur de collège français qui prépare des élèves de 3e au Brevet.
 On te donne la photo d'une leçon (manuscrite ou imprimée). Tu produis un quiz de révision active.
 
 Règles strictes :
 - Lis attentivement TOUT ce qui est visible sur l'image, y compris l'écriture manuscrite.
-- Génère exactement 10 questions à choix multiples portant UNIQUEMENT sur le contenu de cette leçon.
-- 4 propositions par question, une seule correcte. Les mauvaises réponses doivent être plausibles, pas absurdes.
+- Génère exactement ${nQuestions} questions à choix multiples portant UNIQUEMENT sur le contenu de cette leçon.
+- ${nChoices} propositions par question, une seule correcte. Les mauvaises réponses doivent être plausibles, pas absurdes.
 - Varie : définitions, applications, pièges classiques, cas concrets. Pas seulement du par-cœur.
 - Formule en français simple et direct, tutoiement.
 - Pour chaque question, "why" explique la bonne réponse en une phrase courte et utile.
 - Si l'image est illisible ou ne contient pas de leçon, renvoie {"error":"..."} en expliquant pourquoi.
 
 Réponds UNIQUEMENT avec du JSON valide, sans texte autour, sans bloc de code :
-{"title":"...","subject":"...","questions":[{"q":"...","choices":["a","b","c","d"],"answer":0,"why":"..."}]}`;
+{"title":"...","subject":"...","questions":[{"q":"...","choices":[${Array(nChoices).fill('"..."').join(',')}],"answer":0,"why":"..."}]}`;
+}
 
 export interface QuizResult { title: string; subject: string; questions: QuizQuestion[]; provider: string; }
+export interface QuizOptions { questions: number; choices: number; }
+const DEFAULT_OPTS: QuizOptions = { questions: 10, choices: 4 };
 
 function parseJSON(raw: string): any {
   const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
@@ -26,14 +30,14 @@ function parseJSON(raw: string): any {
   throw new Error('Réponse IA illisible');
 }
 
-function normalize(data: any, provider: string): QuizResult {
+function normalize(data: any, provider: string, opts: QuizOptions): QuizResult {
   if (data?.error) throw new Error(String(data.error));
   const questions: QuizQuestion[] = (data.questions ?? [])
     .filter((q: any) => q?.q && Array.isArray(q.choices) && q.choices.length >= 2)
-    .slice(0, 12)
+    .slice(0, opts.questions)
     .map((q: any) => ({
       q: String(q.q),
-      choices: q.choices.map(String).slice(0, 4),
+      choices: q.choices.map(String).slice(0, opts.choices),
       answer: Math.max(0, Math.min(q.choices.length - 1, Number(q.answer) || 0)),
       why: q.why ? String(q.why) : undefined,
     }));
@@ -54,12 +58,12 @@ function anthropicClient() {
   });
 }
 
-async function viaAnthropic(base64: string, mime: string, hint: string): Promise<QuizResult> {
+async function viaAnthropic(base64: string, mime: string, hint: string, opts: QuizOptions): Promise<QuizResult> {
   const client = anthropicClient();
   const res = await client.messages.create({
     model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
     max_tokens: 4000,
-    system: SYSTEM,
+    system: buildSystem(opts.questions, opts.choices),
     messages: [{
       role: 'user',
       content: [
@@ -69,10 +73,10 @@ async function viaAnthropic(base64: string, mime: string, hint: string): Promise
     }],
   });
   const text = res.content.filter((b) => b.type === 'text').map((b: any) => b.text).join('');
-  return normalize(parseJSON(text), 'anthropic');
+  return normalize(parseJSON(text), 'anthropic', opts);
 }
 
-async function viaGroq(base64: string, mime: string, hint: string): Promise<QuizResult> {
+async function viaGroq(base64: string, mime: string, hint: string, opts: QuizOptions): Promise<QuizResult> {
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
@@ -83,7 +87,7 @@ async function viaGroq(base64: string, mime: string, hint: string): Promise<Quiz
       messages: [{
         role: 'user',
         content: [
-          { type: 'text', text: `${SYSTEM}\n\n${hint ? `Contexte : ${hint}` : ''}` },
+          { type: 'text', text: `${buildSystem(opts.questions, opts.choices)}\n\n${hint ? `Contexte : ${hint}` : ''}` },
           { type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } },
         ],
       }],
@@ -91,7 +95,7 @@ async function viaGroq(base64: string, mime: string, hint: string): Promise<Quiz
   });
   if (!res.ok) throw new Error(`Groq ${res.status} : ${(await res.text()).slice(0, 200)}`);
   const json = await res.json();
-  return normalize(parseJSON(json.choices?.[0]?.message?.content ?? ''), 'groq');
+  return normalize(parseJSON(json.choices?.[0]?.message?.content ?? ''), 'groq', opts);
 }
 
 /**
@@ -100,9 +104,13 @@ async function viaGroq(base64: string, mime: string, hint: string): Promise<Quiz
  * répondent « over capacity » à toute requête contenant une image), donc on
  * passe par Anthropic — sauf si un modèle vision Groq est explicitement fourni.
  */
-export async function generateQuiz(base64: string, mime: string, hint = ''): Promise<QuizResult> {
-  if (process.env.ANTHROPIC_API_KEY) return viaAnthropic(base64, mime, hint);
-  if (process.env.GROQ_API_KEY && process.env.GROQ_VISION_MODEL) return viaGroq(base64, mime, hint);
+export async function generateQuiz(base64: string, mime: string, hint = '', opts: Partial<QuizOptions> = {}): Promise<QuizResult> {
+  const full: QuizOptions = {
+    questions: Math.min(15, Math.max(3, opts.questions ?? DEFAULT_OPTS.questions)),
+    choices: Math.min(6, Math.max(2, opts.choices ?? DEFAULT_OPTS.choices)),
+  };
+  if (process.env.ANTHROPIC_API_KEY) return viaAnthropic(base64, mime, hint, full);
+  if (process.env.GROQ_API_KEY && process.env.GROQ_VISION_MODEL) return viaGroq(base64, mime, hint, full);
   throw new Error("Le quiz par photo demande une clé ANTHROPIC_API_KEY (Groq ne lit plus les images).");
 }
 

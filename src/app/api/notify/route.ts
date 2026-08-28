@@ -34,6 +34,10 @@ function fromParent(kind: string, b: any): { copy: Copy; pref: string } | null {
   switch (kind) {
     case 'kudos':
       return { pref: 'kudos', copy: { title: `${b.emoji ?? '💜'} Message`, body: String(b.body ?? ''), url: '/me' } };
+    case 'message':
+      return { pref: 'message', copy: { title: '✉️ Nouveau message', body: String(b.body ?? ''), url: '/me' } };
+    case 'quiz_assigned':
+      return { pref: 'quiz_assigned', copy: { title: '🧠 Nouveau quiz', body: `Tes parents t'ont préparé « ${b.title} »`, url: '/quiz' } };
     case 'task_created':
       return { pref: 'task_created', copy: { title: '📝 Nouvelle tâche', body: `${b.title}${b.time ? ` · ${String(b.time).slice(0, 5)}` : ''}`, url: '/day' } };
     case 'reward_created':

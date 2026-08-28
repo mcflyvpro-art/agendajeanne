@@ -4,11 +4,13 @@ import clsx from 'clsx';
 import ParentShell from '@/components/ParentShell';
 import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
-import { suggestCoins, levelOf } from '@/lib/economy';
+import { suggestCoins } from '@/lib/economy';
 import { calibrate, REFERENCE_DURATION } from '@/lib/calibrate';
 import { notifCopy } from '@/lib/tone';
 import Help, { LabelHelp } from '@/components/Help';
-import { Loader, SegmentedTabs, Toggle, toast } from '@/components/ui';
+import { Loader, SegmentedTabs, Toggle, NumberField, Sheet, toast } from '@/components/ui';
+import LevelRoad from '@/components/LevelRoad';
+import type { Reward } from '@/lib/types';
 import type { Settings, Tone, ParentNotifKind, ChildNotifKind } from '@/lib/types';
 
 export default function RulesPage() { return <ParentShell><Rules /></ParentShell>; }
@@ -34,10 +36,12 @@ const CHILD_NOTIFS: { k: ChildNotifKind; emoji: string; label: string }[] = [
   { k: 'reminders',        emoji: '🔔', label: 'Rappels des tâches' },
   { k: 'task_created',     emoji: '📝', label: 'Nouvelle tâche' },
   { k: 'kudos',            emoji: '💜', label: 'Encouragements' },
+  { k: 'message',          emoji: '✉️', label: 'Message reçu' },
   { k: 'validation',       emoji: '✅', label: 'Résultat de validation' },
   { k: 'reward_created',   emoji: '🎁', label: 'Nouvelle récompense' },
   { k: 'contract_created', emoji: '🤝', label: 'Nouveau contrat' },
   { k: 'level_up',         emoji: '⭐', label: 'Montée de niveau' },
+  { k: 'quiz_assigned',    emoji: '🧠', label: 'Nouveau quiz reçu' },
 ];
 
 function Rules() {
@@ -65,11 +69,7 @@ function Rules() {
   }) => (
     <div>
       {help ? <LabelHelp label={label} help={help} /> : <label className="label">{label}</label>}
-      <div className="flex items-center gap-2">
-        <input type="number" className="field flex-1" value={s[k] as number}
-               onChange={(e) => set(k, Number(e.target.value) as any)} />
-        {suffix && <span className="shrink-0 text-lg font-black text-muted">{suffix}</span>}
-      </div>
+      <NumberField value={s[k] as number} suffix={suffix} onChange={(n) => set(k, n as any)} />
     </div>
   );
 
@@ -176,11 +176,7 @@ function Rules() {
             <Num k="xp_per_task" label="XP par tâche" suffix="⚡"
                  help={<><p>Multiplié par la difficulté de la tâche, comme les points.</p></>} />
             <Num k="xp_per_quiz_answer" label="XP par bonne réponse" suffix="⚡" />
-            <Num k="xp_per_level" label="XP pour monter d’un niveau" suffix="⚡"
-                 help={<>
-                   <p>Plus la valeur est basse, plus les niveaux s’enchaînent vite.</p>
-                   <p>Trop vite, ils perdent leur valeur ; trop lentement, elle ne les voit jamais arriver. Vise <b>un niveau tous les 4 à 6 jours</b> — l’aperçu ci-dessous vous le dit.</p>
-                 </>} />
+            <LevelPace s={s} onGoToEco={() => setTab('eco')} onChange={(v) => setS({ ...s, ...v })} />
             <Num k="level_up_coins" label="Bonus à chaque niveau" suffix={s.currency_emoji} />
             <Num k="daily_xp_goal" label="Objectif XP du jour" suffix="⚡"
                  help={<>
@@ -188,20 +184,7 @@ function Rules() {
                    <p>Cale-le sur une journée normale de travail : atteignable tous les jours, mais seulement si elle fait ce qui est prévu.</p>
                  </>} />
 
-            <div className="card bg-soft p-4">
-              <p className="mb-3 font-black text-ink">Aperçu des niveaux</p>
-              <ul className="space-y-2">
-                {[1, 5, 10, 20, 30].map((lv) => {
-                  const info = levelOf((lv - 1) * s.xp_per_level, s.xp_per_level);
-                  return (
-                    <li key={lv} className="flex justify-between font-extrabold">
-                      <span className="text-muted">Niveau {lv}</span>
-                      <span className="text-grape">{info.title} · {(lv - 1) * s.xp_per_level} ⚡</span>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
+            <RoadPreviewButton s={s} />
           </>
         )}
 
@@ -243,6 +226,16 @@ function Rules() {
                    <p>Nombre de fois où elle peut déclarer son humeur dans la journée.</p>
                    <p>À 1, la question disparaît de son écran dès qu’elle a répondu.</p>
                  </>} />
+
+            <div>
+              <LabelHelp label="🧠 Création de quiz" title="Autoriser la création de quiz"
+                         help={<>
+                           <p>Quand c’est désactivé, le bouton photo disparaît de son écran quiz : elle ne peut plus en générer de nouveaux, seulement faire ceux que vous lui envoyez.</p>
+                           <p>Utile pour éviter des photos inutiles, ou toujours la même leçon reprise en boucle.</p>
+                         </>} />
+              <Toggle emoji="📸" label="Elle peut créer ses propres quiz"
+                      checked={s.child_can_create_quiz} onChange={(v) => set('child_can_create_quiz', v)} />
+            </div>
           </>
         )}
 
@@ -386,24 +379,12 @@ function Calibrator({ s, onApply }: { s: Settings; onApply: (v: Partial<Settings
       <div className="space-y-4">
         <div>
           <label className="label">Tâches par jour</label>
-          <div className="flex gap-2">
-            {[2, 3, 4, 5, 6].map((n) => (
-              <button key={n} onClick={() => setTasks(n)}
-                      className={clsx('flex-1 rounded-2xl border-2 py-3 text-lg font-black transition',
-                        tasks === n ? 'border-grape bg-grape text-white' : 'border-line bg-card text-muted')}>
-                {n}
-              </button>
-            ))}
-          </div>
+          <NumberField value={tasks} min={1} onChange={setTasks} />
         </div>
 
         <div>
           <label className="label">Objectif d’une bonne semaine</label>
-          <div className="flex items-center gap-2">
-            <input type="number" step={50} className="field flex-1" value={target}
-                   onChange={(e) => setTarget(Number(e.target.value) || 0)} />
-            <span className="shrink-0 text-lg font-black text-muted">{s.currency_emoji}</span>
-          </div>
+          <NumberField value={target} min={0} suffix={s.currency_emoji} onChange={setTarget} />
           <div className="mt-2 flex flex-wrap gap-2">
             {[600, 900, 1200, 1800, 2400].map((n) => (
               <button key={n} onClick={() => setTarget(n)} className="chip">{n}</button>
@@ -448,6 +429,76 @@ function Calibrator({ s, onApply }: { s: Settings; onApply: (v: Partial<Settings
         </button>
       </div>
     </section>
+  );
+}
+
+/* ------------------------------------------------------ rythme des niveaux */
+/**
+ * Plutôt que de fixer un nombre d'XP arbitraire, le parent choisit directement
+ * en combien de jours un niveau doit tomber si Jeanne fait tout ce qui est
+ * prévu. Le calcul se base sur le rythme quotidien déjà choisi dans l'onglet
+ * Points : sans lui, impossible de savoir combien d'XP une journée rapporte.
+ */
+function LevelPace({ s, onChange, onGoToEco }: {
+  s: Settings; onChange: (v: Partial<Settings>) => void; onGoToEco: () => void;
+}) {
+  const dailyXp = s.xp_per_task * Math.max(1, s.calib_tasks_per_day || 0);
+  const notSet = !s.calib_tasks_per_day;
+  const [days, setDays] = useState(Math.max(1, Math.round(s.xp_per_level / Math.max(1, dailyXp))));
+
+  if (notSet) {
+    return (
+      <div className="card border-2 border-sun bg-sun-light p-4">
+        <p className="font-extrabold text-ink">Rythme quotidien pas encore choisi</p>
+        <p className="mt-1.5 text-sm font-medium text-muted">
+          Réglez d’abord le nombre de tâches par jour visé, dans l’onglet Points — l’app calculera ensuite le rythme des niveaux à partir de là.
+        </p>
+        <button onClick={onGoToEco} className="btn-sun mt-3 w-full">Aller régler ça</button>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <LabelHelp label="Jours pour monter d’un niveau" title="Le rythme des niveaux"
+                 help={<>
+                   <p>Vous dites en combien de jours un niveau doit tomber si Jeanne fait tout ce qui est prévu, et l’app calcule le nombre d’XP nécessaire à votre place.</p>
+                   <p>Cela se base sur le rythme choisi dans l’onglet Points ({s.calib_tasks_per_day} tâches/jour × {s.xp_per_task} XP = {dailyXp} XP par jour).</p>
+                   <p>Trop court, les niveaux perdent leur valeur ; trop long, elle ne les voit jamais arriver.</p>
+                 </>} />
+      <NumberField value={days} min={1} suffix="jours"
+                   onChange={(n) => { setDays(n); onChange({ xp_per_level: Math.max(10, dailyXp * n) }); }} />
+      <p className="mt-2 text-sm font-bold text-muted">Soit {dailyXp * days} ⚡ par niveau</p>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------- aperçu route */
+function RoadPreviewButton({ s }: { s: Settings }) {
+  const { child } = useApp();
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<Reward[]>([]);
+  const [owned, setOwned] = useState<Set<string>>(new Set());
+
+  const load = async () => {
+    if (!child) return;
+    const [r, o] = await Promise.all([
+      supabase.from('rewards').select('*').eq('kind', 'item').not('unlock_level', 'is', null).order('unlock_level'),
+      supabase.from('child_items').select('item_value').eq('child_id', child.id),
+    ]);
+    setItems((r.data ?? []) as Reward[]);
+    setOwned(new Set((o.data ?? []).map((x: any) => x.item_value)));
+  };
+
+  return (
+    <>
+      <button onClick={async () => { await load(); setOpen(true); }} className="btn-plain w-full">
+        🎖️ Aperçu des niveaux
+      </button>
+      <Sheet open={open} onClose={() => setOpen(false)} title="Route des niveaux">
+        {child && <LevelRoad settings={s} xp={child.xp} avatarEmoji={child.avatar_emoji} items={items} owned={owned} />}
+      </Sheet>
+    </>
   );
 }
 

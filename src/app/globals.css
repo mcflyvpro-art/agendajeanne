@@ -21,6 +21,10 @@ body {
 
 input, select, textarea { font-size: 16px; }
 button, a { -webkit-touch-callout: none; }
+/* Chrome Android dessine un contour bleu par défaut au focus tactile,
+   visible autour des boutons enrobant un visuel (ex. l'avatar dans « Moi »). */
+button, a, input, textarea, select { outline: none; -webkit-tap-highlight-color: transparent; }
+button::-moz-focus-inner { border: 0; }
 .no-select { -webkit-user-select: none; user-select: none; }
 
 ::-webkit-scrollbar { width: 0; height: 0; }

@@ -9,7 +9,7 @@ import { useLive } from '@/lib/useLive';
 import { AVATAR_CHOICES } from '@/lib/avatars';
 import { weekStart, todayISO } from '@/lib/dates';
 import { notify } from '@/lib/actions';
-import { Loader, Sheet, Empty, SegmentedTabs, toast } from '@/components/ui';
+import { Loader, Sheet, Empty, SegmentedTabs, NumberField, toast } from '@/components/ui';
 import type { Reward, Redemption, Contract } from '@/lib/types';
 
 export default function RewardsPage() { return <ParentShell><Rewards /></ParentShell>; }
@@ -145,7 +145,9 @@ function Rewards() {
           })}
           {rewards.length === 0 && <div className="mt-5"><Empty emoji="🎁" title="Vide" /></div>}
           <button onClick={() => setEdit({ emoji: '🎁', cost: 100, category: 'Divers', active: true, kind: 'action' })}
-                  className="btn-grape btn-lg mt-6 w-full"><Plus size={20} /> Ajouter</button>
+                  className="btn-grape btn-lg sticky bottom-28 mt-6 w-full shadow-lift">
+            <Plus size={20} /> Ajouter
+          </button>
         </>
       )}
 
@@ -237,7 +239,7 @@ function Rewards() {
             )}
             <div className={clsx('grid gap-3', edit.kind === 'item' ? 'grid-cols-1' : 'grid-cols-2')}>
               <div><label className="label">Prix</label>
-                <input type="number" className="field" value={edit.cost ?? 100} onChange={(e) => setEdit({ ...edit, cost: Number(e.target.value) })} /></div>
+                <NumberField value={edit.cost ?? 100} min={0} onChange={(n) => setEdit({ ...edit, cost: n })} /></div>
               {edit.kind !== 'item' && (
                 <div><label className="label">Catégorie</label>
                   <input className="field" value={edit.category ?? ''} onChange={(e) => setEdit({ ...edit, category: e.target.value })} /></div>
@@ -298,11 +300,11 @@ function ContractTab() {
             <option value="perfect_days">Journées</option>
           </select></div>
         <div><label className="label">Cible</label>
-          <input type="number" className="field" value={c.target ?? 0} onChange={(e) => setC({ ...c, target: Number(e.target.value) })} /></div>
+          <NumberField value={c.target ?? 0} min={1} onChange={(n) => setC({ ...c, target: n })} /></div>
       </div>
       <input className="field" value={c.reward_text ?? ''} onChange={(e) => setC({ ...c, reward_text: e.target.value })} placeholder="🎁 Récompense promise" />
       <div><label className="label">Bonus {settings.currency_emoji}</label>
-        <input type="number" className="field" value={c.reward_coins ?? 0} onChange={(e) => setC({ ...c, reward_coins: Number(e.target.value) })} /></div>
+        <NumberField value={c.reward_coins ?? 0} min={0} onChange={(n) => setC({ ...c, reward_coins: n })} /></div>
       {c.status && c.status !== 'proposed' && (
         <p className="chip !border-leaf !bg-leaf-light !text-leaf-dark">
           {c.status === 'accepted' ? '✅ Accepté' : c.status === 'achieved' ? '🏆 Réussi' : '❌ Raté'}

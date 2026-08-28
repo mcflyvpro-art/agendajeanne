@@ -42,8 +42,13 @@ function Me() {
       setOwned(new Set((o.data ?? []).map((x: any) => x.code)));
       setLedger((l.data ?? []) as LedgerRow[]);
       setContract((c.data as Contract) ?? null);
-      setMsgs((m.data ?? []) as Message[]);
+      const msgRows = (m.data ?? []) as Message[];
+      setMsgs(msgRows);
       setDoneCount(t.count ?? 0);
+
+      // Ouvrir « Moi » vaut lecture : le parent voit l'accusé de lecture.
+      const unread = msgRows.filter((x) => !x.read_at).map((x) => x.id);
+      if (unread.length) supabase.from('messages').update({ read_at: new Date().toISOString() }).in('id', unread).then(() => {});
       setItems((it.data ?? []) as ChildItem[]);
       setLoading(false);
     }
