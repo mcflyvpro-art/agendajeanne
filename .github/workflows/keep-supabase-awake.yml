@@ -1,0 +1,25 @@
+name: Garder Supabase éveillé
+
+# Les projets Supabase gratuits se mettent en pause après ~7 jours sans
+# activité. On envoie une requête inoffensive tous les 3 jours pour que ça
+# n'arrive jamais — largement sous le seuil, même avec un peu de retard
+# du planificateur GitHub.
+on:
+  schedule:
+    - cron: '17 6 */3 * *'
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Interroger l'API Supabase
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${{ secrets.SUPABASE_URL }}/rest/v1/" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}")
+          echo "Réponse HTTP : $code"
+          if [ "$code" -lt 200 ] || [ "$code" -ge 500 ]; then
+            echo "::error::Supabase n'a pas répondu correctement ($code)"
+            exit 1
+          fi
