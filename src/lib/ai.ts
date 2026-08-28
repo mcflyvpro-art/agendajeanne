@@ -41,8 +41,21 @@ function normalize(data: any, provider: string): QuizResult {
   return { title: String(data.title ?? 'Quiz de révision'), subject: String(data.subject ?? ''), questions, provider };
 }
 
+/**
+ * Les clés « identity-linked » d'Anthropic exigent l'en-tête
+ * `anthropic-workspace-id` ; les clés classiques l'ignorent. On l'envoie donc
+ * dès qu'il est configuré, ce qui rend le code compatible avec les deux types.
+ */
+function anthropicClient() {
+  const ws = process.env.ANTHROPIC_WORKSPACE_ID;
+  return new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY!,
+    ...(ws ? { defaultHeaders: { 'anthropic-workspace-id': ws } } : {}),
+  });
+}
+
 async function viaAnthropic(base64: string, mime: string, hint: string): Promise<QuizResult> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+  const client = anthropicClient();
   const res = await client.messages.create({
     model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
     max_tokens: 4000,
@@ -123,7 +136,7 @@ Réponds uniquement avec un tableau JSON de chaînes, rien d'autre.`;
     } catch { /* on bascule sur Anthropic */ }
   }
   if (process.env.ANTHROPIC_API_KEY) {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const client = anthropicClient();
     const res = await client.messages.create({
       model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
       max_tokens: 700,
