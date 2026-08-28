@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import ParentShell from '@/components/ParentShell';
 import { useApp } from '@/components/AppProvider';
@@ -8,6 +8,7 @@ import { suggestCoins } from '@/lib/economy';
 import { calibrate, REFERENCE_DURATION } from '@/lib/calibrate';
 import { notifCopy } from '@/lib/tone';
 import Help, { LabelHelp } from '@/components/Help';
+import { resetChildAccount } from '@/lib/reset';
 import { Loader, SegmentedTabs, Toggle, NumberField, Sheet, toast } from '@/components/ui';
 import LevelRoad from '@/components/LevelRoad';
 import type { Reward } from '@/lib/types';
@@ -30,6 +31,7 @@ const PARENT_NOTIFS: { k: ParentNotifKind; emoji: string; label: string }[] = [
   { k: 'level_up',       emoji: '⭐', label: 'Montée de niveau' },
   { k: 'mood',           emoji: '💭', label: 'Humeur déclarée' },
   { k: 'recap',          emoji: '📊', label: 'Bilan du soir' },
+  { k: 'message_reaction', emoji: '💌', label: 'Réaction à un message' },
 ];
 
 const CHILD_NOTIFS: { k: ChildNotifKind; emoji: string; label: string }[] = [
@@ -82,7 +84,7 @@ function Rules() {
 
   return (
     <main className="mx-auto max-w-lg px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
-      <h1 className="text-3xl font-black text-ink">Réglages</h1>
+      <SecretResetTitle />
 
       <div className="mt-4">
         <SegmentedTabs value={tab} onChange={setTab} options={[
@@ -356,9 +358,30 @@ function Rules() {
 function Calibrator({ s, onApply }: { s: Settings; onApply: (v: Partial<Settings>) => void }) {
   const [tasks, setTasks] = useState(s.calib_tasks_per_day ?? 4);
   const [target, setTarget] = useState(s.calib_weekly_target ?? 1200);
+  // Un barème est toujours « en vigueur » (des valeurs par défaut existent
+  // depuis le début) : le formulaire reste donc replié tant qu'on n'a pas
+  // explicitement demandé à le modifier, pour ne pas envahir l'écran à chaque
+  // visite.
+  const [editing, setEditing] = useState(false);
 
   const calc = calibrate(s, tasks, target);
   const gap = calc.perWeek - target;
+
+  if (!editing) {
+    return (
+      <button onClick={() => setEditing(true)}
+              className="card flex w-full items-center gap-3 p-4 text-left no-select active:scale-[.99]">
+        <span className="text-2xl">🔧</span>
+        <div className="min-w-0 flex-1">
+          <p className="font-black text-ink">Barème actuel</p>
+          <p className="text-sm font-bold text-muted">
+            {s.calib_tasks_per_day ?? 4} tâches/jour · objectif {s.calib_weekly_target ?? 1200} {s.currency_emoji}/semaine
+          </p>
+        </div>
+        <span className="chip !border-grape !text-grape">Modifier</span>
+      </button>
+    );
+  }
 
   return (
     <section className="card bg-soft p-4">
@@ -422,11 +445,13 @@ function Calibrator({ s, onApply }: { s: Settings; onApply: (v: Partial<Settings
         <button
           onClick={() => {
             onApply({ ...calc.values, calib_tasks_per_day: tasks, calib_weekly_target: target });
+            setEditing(false);
             toast('Barème calculé — pense à enregistrer');
           }}
           className="btn-grape w-full">
           Appliquer ce barème
         </button>
+        <button onClick={() => setEditing(false)} className="btn-plain w-full">Annuler</button>
       </div>
     </section>
   );
@@ -528,5 +553,57 @@ function TonePreview({ tone, currency }: { tone: Tone; currency: string }) {
         })}
       </div>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------- réinitialisation */
+/**
+ * Sept appuis sur le titre déclenchent une confirmation, puis effacent tout le
+ * compte de l'enfant. Volontairement caché : ce n'est pas un bouton qu'on doit
+ * pouvoir toucher par erreur.
+ */
+function SecretResetTitle() {
+  const { child } = useApp();
+  const [taps, setTaps] = useState(0);
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const tap = () => {
+    if (timer.current) clearTimeout(timer.current);
+    const n = taps + 1;
+    if (n >= 7) { setTaps(0); setConfirm(true); return; }
+    setTaps(n);
+    timer.current = setTimeout(() => setTaps(0), 1500);
+  };
+
+  const doReset = async () => {
+    if (!child) return;
+    setBusy(true);
+    try {
+      await resetChildAccount(child.id);
+      toast('Compte de ' + child.display_name + ' réinitialisé');
+      setConfirm(false);
+    } catch (e: any) {
+      toast(e.message ?? 'Échec de la réinitialisation', 'err');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <>
+      <h1 onClick={tap} className="select-none text-3xl font-black text-ink">Réglages</h1>
+      <Sheet open={confirm} onClose={() => setConfirm(false)} title="Tout effacer ?">
+        <p className="font-medium leading-relaxed text-muted">
+          Points, XP, niveau, série, tâches, routines, quiz, messages, badges, avatars débloqués,
+          récompenses en attente — tout le compte de <b className="text-ink">{child?.display_name}</b> repart de zéro,
+          comme à la toute première connexion.
+        </p>
+        <p className="mt-3 font-black text-flame">C'est irréversible.</p>
+        <div className="mt-5 flex gap-2.5">
+          <button onClick={() => setConfirm(false)} className="btn-plain flex-1">Annuler</button>
+          <button onClick={doReset} disabled={busy} className="btn-flame flex-1">{busy ? '…' : 'Tout effacer'}</button>
+        </div>
+      </Sheet>
+    </>
   );
 }

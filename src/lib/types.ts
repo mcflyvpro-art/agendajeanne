@@ -66,7 +66,7 @@ export interface Settings {
 
 export type ParentNotifKind =
   | 'task_submitted' | 'quiz_done' | 'purchase' | 'badge'
-  | 'level_up' | 'blocked' | 'mood' | 'not_started' | 'recap';
+  | 'level_up' | 'blocked' | 'mood' | 'not_started' | 'recap' | 'message_reaction';
 
 export type ChildNotifKind =
   | 'task_created' | 'kudos' | 'message' | 'reward_created' | 'contract_created'
@@ -168,10 +168,13 @@ export interface Contract {
   status: 'proposed' | 'accepted' | 'achieved' | 'failed'; child_message: string | null;
 }
 
+export type MessageReaction = 'thumb_up' | 'thumb_down' | 'check' | 'cross' | 'heart';
+
 export interface Message {
   id: string; from_id: string | null; to_id: string; task_id: string | null;
   kind: 'message' | 'kudos' | 'blocked' | 'alert' | 'system';
   body: string; emoji: string | null; read_at: string | null; created_at: string;
+  reaction: MessageReaction | null;
 }
 
 export interface Mood { id: string; child_id: string; day: string; mood: number; code: string | null; note: string | null; created_at?: string; }

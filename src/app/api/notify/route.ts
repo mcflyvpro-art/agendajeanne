@@ -25,6 +25,8 @@ function fromChild(kind: string, name: string, b: any): { copy: Copy; pref: stri
       return { pref: 'level_up', copy: { title: `⭐ Niveau ${b.level} !`, body: `${name} vient de monter de niveau`, url: '/parent' } };
     case 'mood':
       return { pref: 'mood', copy: { title: `💭 Humeur du jour`, body: `${name} se sent : ${b.emoji ?? ''}`.trim(), url: '/parent' } };
+    case 'message_reaction':
+      return { pref: 'message_reaction', copy: { title: `${b.emoji ?? ''} Réaction de ${name}`.trim(), body: String(b.body ?? '').slice(0, 80), url: '/parent' } };
     default: return null;
   }
 }

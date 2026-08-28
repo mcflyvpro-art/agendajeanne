@@ -12,9 +12,10 @@ import { supabase } from '@/lib/supabase';
 import { todayISO, hhmm, humanDuration, fromMinutes, toMinutes, nowMinutes } from '@/lib/dates';
 import { minTimerSeconds, requiresPhoto, requiresValidation, progressOf, levelOf, xpToday } from '@/lib/economy';
 import { MOOD_SCALE, MOOD_SPECIAL } from '@/lib/mood';
+import { REACTIONS, reactionEmoji } from '@/lib/reactions';
 import * as A from '@/lib/actions';
 import { Loader, Sheet, Ring, Bar, Confetti, toast } from '@/components/ui';
-import type { Task } from '@/lib/types';
+import type { Task, Message } from '@/lib/types';
 
 export default function NowPage() { return <ChildShell><Now /></ChildShell>; }
 
@@ -82,7 +83,8 @@ function Header({ xp, prog }: { xp: number; prog: { done: number; total: number;
           <h1 className="truncate text-2xl font-black text-ink">{profile.display_name}</h1>
           <p className="text-sm font-bold text-grape">Niveau {lvl.level} · {lvl.title}</p>
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 items-center gap-2">
+          <Inbox />
           {profile.streak_current > 0 && (
             <span className="chip !border-sun !bg-sun-light !text-sun-dark">🔥 {profile.streak_current}</span>
           )}
@@ -109,6 +111,86 @@ function Header({ xp, prog }: { xp: number; prog: { done: number; total: number;
         </div>
       </div>
     </header>
+  );
+}
+
+/* --------------------------------------------------------------- messages */
+/**
+ * Bouton discret avec pastille de comptage, ouvrant tous les messages reçus.
+ * Ouvrir la feuille vaut lecture — le parent voit l'accusé — et chaque
+ * message peut recevoir une seule réaction, remplacée si on en choisit une
+ * autre.
+ */
+function Inbox() {
+  const { profile } = useApp();
+  const [msgs, setMsgs] = useState<Message[]>([]);
+  const [open, setOpen] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!profile) return;
+    const { data } = await supabase.from('messages').select('*')
+      .eq('to_id', profile.id).order('created_at', { ascending: false }).limit(30);
+    setMsgs((data ?? []) as Message[]);
+  }, [profile?.id]);
+
+  useEffect(() => { load(); }, [load]);
+  useLive(['messages'], load, 'now-inbox');
+
+  const unread = msgs.filter((m) => !m.read_at).length;
+
+  const openInbox = async () => {
+    setOpen(true);
+    const ids = msgs.filter((m) => !m.read_at).map((m) => m.id);
+    if (ids.length) {
+      await supabase.from('messages').update({ read_at: new Date().toISOString() }).in('id', ids);
+      load();
+    }
+  };
+
+  const react = async (m: Message, code: string) => {
+    const next = m.reaction === code ? null : code;
+    setMsgs((list) => list.map((x) => (x.id === m.id ? { ...x, reaction: next as any } : x)));
+    await supabase.from('messages').update({ reaction: next }).eq('id', m.id);
+    if (next) A.notify('message_reaction', { emoji: reactionEmoji(next), body: m.body });
+  };
+
+  return (
+    <>
+      <button onClick={openInbox} aria-label="Messages" className="relative no-select active:scale-90">
+        <span className="grid h-9 w-9 place-items-center rounded-full bg-card text-xl shadow-float">💌</span>
+        {unread > 0 && (
+          <span className="absolute -right-1 -top-1 grid h-5 min-w-[20px] place-items-center rounded-full bg-flame px-1 text-[11px] font-black text-white">
+            {unread}
+          </span>
+        )}
+      </button>
+
+      <Sheet open={open} onClose={() => setOpen(false)} title="Messages">
+        {msgs.length === 0 ? (
+          <p className="py-10 text-center text-6xl">📭</p>
+        ) : (
+          <ul className="space-y-3">
+            {msgs.map((m) => (
+              <li key={m.id} className="card p-4">
+                <p className="font-bold text-ink">{m.emoji ?? '💬'} {m.body}</p>
+                <p className="mt-1 text-xs font-bold text-muted">
+                  {new Date(m.created_at).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                </p>
+                <div className="mt-3 flex justify-between gap-1.5">
+                  {REACTIONS.map((r) => (
+                    <button key={r.code} onClick={() => react(m, r.code)}
+                            className={clsx('grid h-11 flex-1 place-items-center rounded-2xl border-2 text-xl no-select transition active:scale-90',
+                              m.reaction === r.code ? 'border-grape bg-grape-light scale-105' : 'border-line bg-card')}>
+                      {r.emoji}
+                    </button>
+                  ))}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Sheet>
+    </>
   );
 }
 

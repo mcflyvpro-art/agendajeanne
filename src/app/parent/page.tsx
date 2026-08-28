@@ -13,6 +13,7 @@ import { progressOf, computeAward, levelOf, xpToday } from '@/lib/economy';
 import { settleDay, adjustBalance, elapsedOf, notify } from '@/lib/actions';
 import { KUDOS } from '@/lib/tone';
 import { moodEmoji } from '@/lib/mood';
+import { reactionEmoji } from '@/lib/reactions';
 import { Loader, Bar, Stat, Sheet, Empty, NumberField, toast } from '@/components/ui';
 import type { Task, Redemption, Message, Mood } from '@/lib/types';
 
@@ -396,9 +397,12 @@ function Mailbox({ childId, refreshKey }: { childId: string; refreshKey: number 
                 {new Date(m.created_at).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
               </p>
             </div>
-            <span className={clsx('shrink-0 text-xs font-black', m.read_at ? 'text-leaf' : 'text-muted')}>
-              {m.read_at ? '✓✓ Lu' : '✓ Envoyé'}
-            </span>
+            <div className="flex shrink-0 flex-col items-end gap-1">
+              <span className={clsx('text-xs font-black', m.read_at ? 'text-leaf' : 'text-muted')}>
+                {m.read_at ? '✓✓ Lu' : '✓ Envoyé'}
+              </span>
+              {m.reaction && <span className="text-xl">{reactionEmoji(m.reaction)}</span>}
+            </div>
           </li>
         ))}
       </ul>
