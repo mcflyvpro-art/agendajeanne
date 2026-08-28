@@ -7,6 +7,7 @@ import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
 import { Loader, Empty, Ring, toast } from '@/components/ui';
 import { checkBadges } from '@/lib/actions';
+import { compressImage } from '@/lib/image';
 import type { Quiz, QuizQuestion } from '@/lib/types';
 
 export default function QuizPage() { return <ChildShell><QuizHome /></ChildShell>; }
@@ -30,19 +31,21 @@ function QuizHome() {
   const create = async (file: File) => {
     setBusy(true);
     try {
-      const b64 = await new Promise<string>((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(String(r.result).split(',')[1]);
-        r.onerror = rej;
-        r.readAsDataURL(file);
-      });
+      // Une capture d'écran PC en pleine résolution peut peser plusieurs Mo :
+      // on la redimensionne avant l'envoi, sinon la requête peut être rejetée
+      // avant même d'atteindre le serveur (limite de taille des fonctions Vercel).
+      const { base64, mime } = await compressImage(file);
       const { data: sess } = await supabase.auth.getSession();
       const r = await fetch('/api/ai/quiz', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sess.session?.access_token ?? ''}` },
-        body: JSON.stringify({ image: b64, mime: file.type || 'image/jpeg' }),
+        body: JSON.stringify({ image: base64, mime }),
       });
-      const json = await r.json();
+
+      const raw = await r.text();
+      let json: any;
+      try { json = JSON.parse(raw); }
+      catch { throw new Error(r.ok ? 'Réponse inattendue du serveur, réessaie' : `Erreur serveur (${r.status}), réessaie`); }
       if (!r.ok) throw new Error(json.error ?? 'Échec de la génération');
 
       const { data, error } = await supabase.from('quizzes').insert({
