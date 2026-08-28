@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import clsx from 'clsx';
 import ChildShell from '@/components/ChildShell';
 import PushManager from '@/components/PushManager';
@@ -8,7 +9,7 @@ import { supabase } from '@/lib/supabase';
 import { useLive } from '@/lib/useLive';
 import { levelOf } from '@/lib/economy';
 import { weekStart, todayISO } from '@/lib/dates';
-import { Loader, Ring, Stat, Empty, toast } from '@/components/ui';
+import { Loader, Ring, Stat, Empty, Sheet, toast } from '@/components/ui';
 import type { Badge, LedgerRow, Contract, Message, ChildItem } from '@/lib/types';
 
 export default function MePage() { return <ChildShell><Me /></ChildShell>; }
@@ -22,6 +23,7 @@ function Me() {
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [doneCount, setDoneCount] = useState(0);
   const [items, setItems] = useState<ChildItem[]>([]);
+  const [pickAvatar, setPickAvatar] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -57,34 +59,20 @@ function Me() {
     <main className="mx-auto max-w-lg space-y-5 px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
       <section className="card p-6 text-center">
         <div className="flex justify-center">
-          <Ring pct={lvl.pct} size={170} stroke={16} color="#7C4DEE">
-            <div className="text-5xl">{profile.avatar_emoji}</div>
-            <div className="mt-1 text-2xl font-black text-grape">Niv. {lvl.level}</div>
-          </Ring>
+          <button onClick={() => setPickAvatar(true)} aria-label="Changer d’avatar" className="no-select active:scale-95">
+            <Ring pct={lvl.pct} size={170} stroke={16} color="#7C4DEE">
+              <div className="text-5xl">{profile.avatar_emoji}</div>
+              <div className="mt-1 text-sm font-black text-grape">✏️ changer</div>
+            </Ring>
+          </button>
         </div>
         <h1 className="mt-4 text-2xl font-black text-ink">{profile.display_name}</h1>
-        <p className="text-lg font-extrabold text-grape">{lvl.title}</p>
-        <p className="mt-2 font-bold text-muted">{lvl.into} / {lvl.per} XP</p>
+        <Link href="/road" className="mt-1 inline-flex items-center gap-2 rounded-full bg-grape-light px-4 py-2 no-select active:scale-95">
+          <span className="text-lg font-extrabold text-grape">🎖️ Niveau {lvl.level} · {lvl.title}</span>
+          <span className="font-black text-grape">›</span>
+        </Link>
+        <p className="mt-3 font-bold text-muted">{lvl.into} / {lvl.per} XP</p>
       </section>
-
-      {items.length > 1 && (
-        <section>
-          <h2 className="mb-3 text-lg font-black text-ink">🎭 Mes avatars</h2>
-          <div className="scroll-x flex gap-2.5 pb-1">
-            {items.filter((i) => i.item_type === 'avatar').map((i) => (
-              <button key={i.id}
-                      onClick={async () => {
-                        await supabase.from('profiles').update({ avatar_emoji: i.item_value }).eq('id', profile.id);
-                        await refresh();
-                      }}
-                      className={clsx('grid h-16 w-16 shrink-0 place-items-center rounded-3xl border-2 text-3xl no-select transition active:scale-90',
-                        profile.avatar_emoji === i.item_value ? 'border-grape bg-grape-light scale-105' : 'border-line bg-card')}>
-                {i.item_value}
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
 
       <div className="flex gap-2.5">
         <Stat emoji="🔥" value={profile.streak_current} label="série" color="#F5A524" />
@@ -186,6 +174,25 @@ function Me() {
       </section>
 
       <button onClick={signOut} className="btn-plain w-full">Se déconnecter</button>
+
+      <Sheet open={pickAvatar} onClose={() => setPickAvatar(false)} title="Mes avatars">
+        <div className="grid grid-cols-4 gap-3">
+          {items.filter((i) => i.item_type === 'avatar').map((i) => (
+            <button key={i.id}
+                    onClick={async () => {
+                      await supabase.from('profiles').update({ avatar_emoji: i.item_value }).eq('id', profile.id);
+                      await refresh();
+                      setPickAvatar(false);
+                    }}
+                    className={clsx('grid aspect-square place-items-center rounded-3xl border-2 text-4xl no-select transition active:scale-90',
+                      profile.avatar_emoji === i.item_value ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
+              {i.item_value}
+            </button>
+          ))}
+        </div>
+        <Link href="/shop" onClick={() => setPickAvatar(false)}
+              className="btn-plain mt-5 w-full">🎁 En débloquer d’autres</Link>
+      </Sheet>
     </main>
   );
 }

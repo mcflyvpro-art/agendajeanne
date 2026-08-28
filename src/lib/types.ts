@@ -57,6 +57,8 @@ export interface Settings {
   level_up_coins: number;
   daily_xp_goal: number;
   mood_per_day: number;
+  calib_tasks_per_day: number;
+  calib_weekly_target: number;
   notif_parent: Record<ParentNotifKind, boolean>;
   notif_child: Record<ChildNotifKind, boolean>;
 }
@@ -134,6 +136,8 @@ export interface Reward {
   kind: 'action' | 'item';
   item_type: string | null;
   item_value: string | null;
+  /** Renseigné = l'objet s'obtient en atteignant ce niveau, il n'est pas à vendre. */
+  unlock_level: number | null;
 }
 
 export interface ChildItem {

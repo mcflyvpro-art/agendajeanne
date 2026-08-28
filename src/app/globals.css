@@ -73,7 +73,7 @@ button, a { -webkit-touch-callout: none; }
   }
   .label { @apply mb-2 block text-sm font-extrabold text-ink; }
   .sheet {
-    @apply fixed inset-x-0 bottom-0 z-50 max-h-[92vh] overflow-y-auto rounded-t-[32px] bg-canvas;
+    @apply fixed inset-x-0 bottom-0 z-50 max-h-[88dvh] rounded-t-[32px] bg-canvas;
   }
 }
 

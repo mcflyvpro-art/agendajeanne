@@ -172,8 +172,30 @@ export async function settleDay(
     ...(perfectDay ? { last_streak_day: today } : {}),
   }).eq('id', child.id);
 
+  if (levelUp) await grantLevelItems(child.id, after);
   const badges = await checkBadges(child.id, streak, after);
   return { badges, perfectDay, levelUp };
+}
+
+/**
+ * Attribue les avatars associés aux paliers atteints.
+ * Un avatar dont `unlock_level` est renseigné ne s'achète pas : il s'obtient
+ * en montant de niveau, et disparaît donc de la boutique.
+ */
+export async function grantLevelItems(childId: string, level: number): Promise<string[]> {
+  const [{ data: unlockable }, { data: owned }] = await Promise.all([
+    supabase.from('rewards').select('id,item_type,item_value,unlock_level')
+      .eq('kind', 'item').not('unlock_level', 'is', null).lte('unlock_level', level),
+    supabase.from('child_items').select('item_type,item_value').eq('child_id', childId),
+  ]);
+  const have = new Set((owned ?? []).map((o: any) => `${o.item_type}|${o.item_value}`));
+  const rows = (unlockable ?? []).filter((r: any) => !have.has(`${r.item_type}|${r.item_value}`));
+  if (!rows.length) return [];
+
+  await supabase.from('child_items').insert(rows.map((r: any) => ({
+    child_id: childId, reward_id: r.id, item_type: r.item_type, item_value: r.item_value,
+  })));
+  return rows.map((r: any) => r.item_value as string);
 }
 
 /** Débloque les badges atteints et crédite leur bonus. */

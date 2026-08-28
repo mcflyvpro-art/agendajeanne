@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 
 export function Loader() {
@@ -23,28 +23,79 @@ export function Sheet({ open, onClose, title, children, footer }: {
   open: boolean; onClose: () => void; title: string;
   children: React.ReactNode; footer?: React.ReactNode;
 }) {
+  const scroller = useRef<HTMLDivElement>(null);
+  const [drag, setDrag] = useState(0);
+  const startY = useRef<number | null>(null);
+
+  /**
+   * Verrouillage du fond. `overflow: hidden` seul ne suffit pas sur iOS : la
+   * page continue de défiler derrière la feuille. On la fige en `position:
+   * fixed` en mémorisant le défilement, restauré à la fermeture.
+   */
   useEffect(() => {
     if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = prev; };
+    const y = window.scrollY;
+    const b = document.body.style;
+    const prev = { position: b.position, top: b.top, width: b.width, overflow: b.overflow };
+    b.position = 'fixed';
+    b.top = `-${y}px`;
+    b.width = '100%';
+    b.overflow = 'hidden';
+    return () => {
+      b.position = prev.position; b.top = prev.top;
+      b.width = prev.width; b.overflow = prev.overflow;
+      window.scrollTo(0, y);
+    };
   }, [open]);
+
   if (!open) return null;
+
+  // Le glissement ne démarre que si le contenu est déjà en haut : sinon on
+  // laisse l'utilisateur faire défiler normalement.
+  const onTouchStart = (e: React.TouchEvent) => {
+    startY.current = (scroller.current?.scrollTop ?? 0) <= 0 ? e.touches[0].clientY : null;
+  };
+  const onTouchMove = (e: React.TouchEvent) => {
+    if (startY.current === null) return;
+    const dy = e.touches[0].clientY - startY.current;
+    setDrag(dy > 0 ? dy : 0);
+  };
+  const onTouchEnd = () => {
+    if (drag > 110) onClose();
+    setDrag(0);
+    startY.current = null;
+  };
+
   return (
     <>
-      <div className="fixed inset-0 z-40 bg-ink/35 backdrop-blur-[2px] animate-[pop_.18s_ease-out]" onClick={onClose} />
-      <div className="sheet animate-[rise_.32s_cubic-bezier(.2,.9,.3,1)] flex flex-col shadow-lift">
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 bg-canvas px-5 pb-3 pt-4">
-          <div className="absolute left-1/2 top-2 h-1.5 w-11 -translate-x-1/2 rounded-full bg-line" />
-          <h2 className="pt-3 text-xl font-black text-ink">{title}</h2>
-          <button onClick={onClose}
-                  className="mt-2 grid h-10 w-10 shrink-0 place-items-center rounded-full bg-soft text-lg font-black text-muted no-select active:scale-90">
-            ✕
-          </button>
+      <div className="fixed inset-0 z-40 bg-ink/35 backdrop-blur-[2px] animate-[pop_.18s_ease-out]"
+           style={{ opacity: Math.max(0, 1 - drag / 300) }} onClick={onClose} />
+      <div className="sheet flex flex-col shadow-lift"
+           style={{
+             transform: `translateY(${drag}px)`,
+             transition: drag ? 'none' : 'transform .28s cubic-bezier(.2,.9,.3,1)',
+             animation: drag ? undefined : 'rise .32s cubic-bezier(.2,.9,.3,1)',
+           }}>
+        <div className="shrink-0 bg-canvas px-5 pb-3 pt-4"
+             onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+          <div className="mx-auto mb-3 h-1.5 w-11 rounded-full bg-line" />
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-xl font-black text-ink">{title}</h2>
+            <button onClick={onClose} aria-label="Fermer"
+                    className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-soft text-lg font-black text-muted no-select active:scale-90">
+              ✕
+            </button>
+          </div>
         </div>
-        <div className="px-5 pb-4">{children}</div>
+
+        <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4"
+             style={{ overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch' }}
+             onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+          {children}
+        </div>
+
         {footer && (
-          <div className="sticky bottom-0 bg-canvas px-5 pt-3"
+          <div className="shrink-0 bg-canvas px-5 pt-3"
                style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + .9rem)' }}>
             {footer}
           </div>

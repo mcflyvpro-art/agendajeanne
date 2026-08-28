@@ -22,16 +22,19 @@ function Rewards() {
   const [rewards, setRewards] = useState<Reward[]>([]);
   const [reqs, setReqs] = useState<Redemption[]>([]);
   const [edit, setEdit] = useState<Partial<Reward> | null>(null);
+  const [owned, setOwned] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     if (!child) return;
-    const [r, q] = await Promise.all([
+    const [r, q, o] = await Promise.all([
       supabase.from('rewards').select('*').order('cost'),
       supabase.from('redemptions').select('*').eq('child_id', child.id).order('created_at', { ascending: false }).limit(30),
+      supabase.from('child_items').select('item_type,item_value').eq('child_id', child.id),
     ]);
     setRewards((r.data ?? []) as Reward[]);
     setReqs((q.data ?? []) as Redemption[]);
+    setOwned(new Set((o.data ?? []).map((x: any) => `${x.item_type}|${x.item_value}`)));
     setLoading(false);
   }, [child?.id]);
   useEffect(() => { load(); }, [load]);
@@ -42,6 +45,11 @@ function Rewards() {
     if (!edit?.name?.trim()) { toast('Nom manquant', 'err'); return; }
     const isItem = edit.kind === 'item';
     if (isItem && !edit.item_value) { toast('Choisis un avatar', 'err'); return; }
+
+    if (isItem && owned.has(`avatar|${edit.item_value}`) && !edit.id) {
+      toast('Jeanne possède déjà cet avatar', 'err');
+      return;
+    }
 
     // Un même avatar ne peut pas être proposé deux fois : on renvoie vers l'existant.
     if (isItem) {
@@ -125,7 +133,9 @@ function Rewards() {
                           <p className="truncate font-extrabold text-ink">{r.name}</p>
                           <p className="truncate text-xs font-bold text-muted">{r.category}</p>
                         </div>
-                        <span className="shrink-0 text-lg font-black text-grape">{r.cost} {settings.currency_emoji}</span>
+                        <span className="shrink-0 text-sm font-black text-grape">
+                          {r.unlock_level ? `Niv. ${r.unlock_level}` : `${r.cost} ${settings.currency_emoji}`}
+                        </span>
                       </button>
                     </li>
                   ))}
@@ -195,13 +205,19 @@ function Rewards() {
               <div>
                 <label className="label">Avatar</label>
                 <div className="grid grid-cols-8 gap-1.5">
-                  {AVATAR_CHOICES.map((e) => (
-                    <button key={e} onClick={() => setEdit({ ...edit, item_value: e, name: edit.name || '' })}
-                            className={clsx('grid aspect-square place-items-center rounded-2xl border-2 text-lg',
-                              edit.item_value === e ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
-                      {e}
-                    </button>
-                  ))}
+                  {AVATAR_CHOICES.map((e) => {
+                    const taken = owned.has(`avatar|${e}`);
+                    return (
+                      <button key={e} disabled={taken}
+                              onClick={() => setEdit({ ...edit, item_value: e, name: edit.name || '' })}
+                              title={taken ? 'Déjà possédé' : undefined}
+                              className={clsx('grid aspect-square place-items-center rounded-2xl border-2 text-lg',
+                                taken ? 'border-line bg-soft opacity-30'
+                                : edit.item_value === e ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
+                        {e}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             ) : (

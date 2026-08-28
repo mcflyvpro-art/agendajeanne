@@ -39,7 +39,10 @@ function Shop() {
   if (loading || !profile || !settings) return <Loader />;
 
   const ownedSet = new Set(owned.map((o) => `${o.item_type}|${o.item_value}`));
-  const items = rewards.filter((r) => r.kind === 'item');
+  // Un avatar acheté disparaît définitivement du rayon : il vit désormais dans
+  // « Moi ». Ceux liés à un niveau ne sont pas à vendre, ils se gagnent.
+  const items = rewards.filter((r) =>
+    r.kind === 'item' && !r.unlock_level && !ownedSet.has(`${r.item_type}|${r.item_value}`));
   const actions = rewards.filter((r) => r.kind !== 'item');
 
   const buy = async (r: Reward) => {
@@ -94,25 +97,16 @@ function Shop() {
 
       {!!items.length && (
         <section className="mt-6">
-          <h2 className="mb-3 text-lg font-black text-ink">🎭 Avatars</h2>
+          <h2 className="mb-3 text-lg font-black text-ink">🎭 Avatars à débloquer</h2>
           <div className="grid grid-cols-3 gap-3">
             {items.map((r) => {
-              const has = ownedSet.has(`${r.item_type}|${r.item_value}`);
               const ok = profile.coins >= r.cost;
-              const worn = profile.avatar_emoji === r.item_value;
               return (
-                <button key={r.id}
-                        onClick={async () => {
-                          if (!has) return setPicked(r);
-                          await supabase.from('profiles').update({ avatar_emoji: r.item_value }).eq('id', profile.id);
-                          await refresh(); toast('Avatar changé');
-                        }}
-                        className={clsx('tile p-3 text-center no-select active:scale-95',
-                          worn ? 'border-grape bg-grape-light' : has ? 'border-leaf' : !ok && 'opacity-50')}>
+                <button key={r.id} onClick={() => setPicked(r)}
+                        className={clsx('tile p-3 text-center no-select active:scale-95', !ok && 'opacity-50')}>
                   <div className="text-4xl">{r.item_value ?? r.emoji}</div>
-                  <p className={clsx('mt-1.5 text-xs font-black',
-                    worn ? 'text-grape' : has ? 'text-leaf' : ok ? 'text-ink' : 'text-muted')}>
-                    {worn ? 'Porté' : has ? 'Choisir' : `${ok ? '' : '🔒 '}${r.cost}`}
+                  <p className={clsx('mt-1.5 text-xs font-black', ok ? 'text-ink' : 'text-muted')}>
+                    {ok ? '' : '🔒 '}{r.cost}
                   </p>
                 </button>
               );

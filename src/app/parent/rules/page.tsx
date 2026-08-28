@@ -5,7 +5,7 @@ import ParentShell from '@/components/ParentShell';
 import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
 import { suggestCoins, levelOf } from '@/lib/economy';
-import { PRESETS, project } from '@/lib/presets';
+import { calibrate, REFERENCE_DURATION } from '@/lib/calibrate';
 import { notifCopy } from '@/lib/tone';
 import Help, { LabelHelp } from '@/components/Help';
 import { Loader, SegmentedTabs, Toggle, toast } from '@/components/ui';
@@ -60,11 +60,6 @@ function Rules() {
     else { await refresh(); toast('Enregistré'); }
   };
 
-  const applyPreset = (values: Partial<Settings>) => {
-    setS({ ...s, ...values });
-    toast('Scénario appliqué — pense à enregistrer');
-  };
-
   const Num = ({ k, label, suffix, help }: {
     k: keyof Settings; label: string; suffix?: string; help?: React.ReactNode;
   }) => (
@@ -100,7 +95,7 @@ function Rules() {
       </div>
 
       <div className="mt-5 space-y-5">
-        {(tab === 'eco' || tab === 'xp') && <Presets onApply={applyPreset} current={s} />}
+        {tab === 'eco' && <Calibrator s={s} onApply={(v) => setS({ ...s, ...v })} />}
 
         {tab === 'eco' && (
           <>
@@ -360,58 +355,97 @@ function Rules() {
   );
 }
 
-/* -------------------------------------------------------------- scénarios */
-function Presets({ onApply, current }: { onApply: (v: Partial<Settings>) => void; current: Settings }) {
-  const [open, setOpen] = useState<string | null>(null);
+/* ------------------------------------------------------------ calibrage -- */
+/**
+ * Deux chiffres suffisent : le rythme visé et ce qu'une bonne semaine doit
+ * rapporter. Le barème complet s'en déduit — voir `calibrate.ts`.
+ */
+function Calibrator({ s, onApply }: { s: Settings; onApply: (v: Partial<Settings>) => void }) {
+  const [tasks, setTasks] = useState(s.calib_tasks_per_day ?? 4);
+  const [target, setTarget] = useState(s.calib_weekly_target ?? 1200);
+
+  const calc = calibrate(s, tasks, target);
+  const gap = calc.perWeek - target;
 
   return (
     <section className="card bg-soft p-4">
       <div className="mb-1 flex items-center gap-2">
-        <p className="text-base font-black text-ink">Réglages tout faits</p>
-        <Help title="Comment choisir un scénario ?">
-          <p>Ces trois réglages remplacent d’un coup toutes les valeurs de points, d’XP et de contraintes.</p>
-          <p>Ils sont calibrés pour qu’une <b>bonne semaine</b> rapporte à peu près la même chose dans les trois cas — autour de 1 200 points, soit exactement les 10 € d’argent de poche de la boutique.</p>
-          <p>Ce qui change n’est donc pas la valeur des récompenses, mais <b>l’effort demandé</b> pour les atteindre. Vous pouvez changer d’avis en cours de route sans dérégler les prix.</p>
-          <p>Après application, tout reste modifiable ligne par ligne.</p>
+        <p className="text-base font-black text-ink">Calibrer automatiquement</p>
+        <Help title="Comment ça marche ?">
+          <p>Vous donnez deux chiffres, l’app calcule tout le barème à votre place.</p>
+          <p><b>Tâches par jour</b> : le rythme que vous visez pour une journée normale.</p>
+          <p><b>Objectif de la semaine</b> : ce qu’une semaine où tout est fait doit rapporter.</p>
+          <p>Le repère utile est le prix de vos récompenses : si les 10 € d’argent de poche coûtent 1 200 points, mettez 1 200 pour qu’une semaine parfaite les rapporte tout juste.</p>
+          <p>L’app répartit ensuite le montant entre une part fixe, versée dès qu’une tâche est finie, et une part proportionnelle à sa durée.</p>
         </Help>
       </div>
-      <p className="mb-4 text-sm font-medium text-muted">Une bonne semaine ≈ 1 200 points dans les trois cas.</p>
+      <p className="mb-4 text-sm font-medium text-muted">
+        Deux chiffres, et le barème se règle tout seul.
+      </p>
 
-      <div className="space-y-2.5">
-        {PRESETS.map((p) => {
-          const proj = project(p.values, p.tasksPerDay);
-          const isOpen = open === p.id;
-          return (
-            <div key={p.id} className={clsx('rounded-3xl border-2 bg-card transition', isOpen ? 'border-grape' : 'border-line')}>
-              <button onClick={() => setOpen(isOpen ? null : p.id)} className="flex w-full items-center gap-3 p-4 text-left no-select">
-                <span className="text-3xl">{p.emoji}</span>
-                <div className="min-w-0 flex-1">
-                  <p className="font-black text-ink">{p.name}</p>
-                  <p className="text-xs font-bold text-muted">{p.tasksPerDay} tâches/jour · ~{proj.perWeek} pts/semaine</p>
-                </div>
-                <span className="text-lg text-muted">{isOpen ? '▴' : '▾'}</span>
+      <div className="space-y-4">
+        <div>
+          <label className="label">Tâches par jour</label>
+          <div className="flex gap-2">
+            {[2, 3, 4, 5, 6].map((n) => (
+              <button key={n} onClick={() => setTasks(n)}
+                      className={clsx('flex-1 rounded-2xl border-2 py-3 text-lg font-black transition',
+                        tasks === n ? 'border-grape bg-grape text-white' : 'border-line bg-card text-muted')}>
+                {n}
               </button>
+            ))}
+          </div>
+        </div>
 
-              {isOpen && (
-                <div className="border-t-2 border-line p-4">
-                  <p className="text-sm font-medium leading-relaxed text-muted">{p.summary}</p>
-                  <ul className="mt-3 space-y-1.5 text-sm font-bold">
-                    <li className="flex justify-between"><span className="text-muted">Une tâche de 45 min</span><span className="text-ink">{proj.perTask} pts</span></li>
-                    <li className="flex justify-between"><span className="text-muted">…avec les bonus</span><span className="text-ink">{proj.perTaskBonus} pts</span></li>
-                    <li className="flex justify-between"><span className="text-muted">Une journée complète</span><span className="text-ink">{proj.perDay} pts</span></li>
-                    <li className="flex justify-between"><span className="text-muted">Une semaine complète</span><span className="text-grape">{proj.perWeek} pts</span></li>
-                    <li className="flex justify-between"><span className="text-muted">Un niveau tous les</span><span className="text-ink">{proj.daysPerLevel} jours</span></li>
-                    <li className="flex justify-between"><span className="text-muted">Preuve photo</span><span className="text-ink">{p.values.default_require_photo ? 'oui' : 'non'}</span></li>
-                    <li className="flex justify-between"><span className="text-muted">Validation parent</span><span className="text-ink">{p.values.default_require_validation ? 'oui' : 'non'}</span></li>
-                    <li className="flex justify-between"><span className="text-muted">Minuteur bloquant</span><span className="text-ink">{p.values.default_min_timer_pct} %</span></li>
-                    <li className="flex justify-between"><span className="text-muted">Reports par jour</span><span className="text-ink">{p.values.max_postpones_per_day}</span></li>
-                  </ul>
-                  <button onClick={() => onApply(p.values)} className="btn-grape mt-4 w-full">Appliquer ce scénario</button>
-                </div>
-              )}
-            </div>
-          );
-        })}
+        <div>
+          <label className="label">Objectif d’une bonne semaine</label>
+          <div className="flex items-center gap-2">
+            <input type="number" step={50} className="field flex-1" value={target}
+                   onChange={(e) => setTarget(Number(e.target.value) || 0)} />
+            <span className="shrink-0 text-lg font-black text-muted">{s.currency_emoji}</span>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {[600, 900, 1200, 1800, 2400].map((n) => (
+              <button key={n} onClick={() => setTarget(n)} className="chip">{n}</button>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-3xl border-2 border-line bg-card p-4">
+          <p className="mb-2.5 font-black text-ink">Ce que ça donnera</p>
+          <ul className="space-y-1.5 text-sm font-bold">
+            <li className="flex justify-between">
+              <span className="text-muted">Une tâche de {REFERENCE_DURATION} min</span>
+              <span className="text-ink">{calc.perTask} {s.currency_emoji}</span>
+            </li>
+            <li className="flex justify-between">
+              <span className="text-muted">…si elle démarre à l’heure</span>
+              <span className="text-ink">{calc.perTaskWithBonus} {s.currency_emoji}</span>
+            </li>
+            <li className="flex justify-between">
+              <span className="text-muted">Une journée complète</span>
+              <span className="text-ink">{calc.perDay} {s.currency_emoji}</span>
+            </li>
+            <li className="flex justify-between border-t-2 border-line pt-1.5">
+              <span className="text-muted">Une semaine complète</span>
+              <span className="text-grape">{calc.perWeek} {s.currency_emoji}</span>
+            </li>
+          </ul>
+          {Math.abs(gap) > target * 0.03 && (
+            <p className="mt-2.5 text-xs font-bold text-muted">
+              {gap > 0 ? '+' : ''}{gap} par rapport à votre objectif (arrondis).
+            </p>
+          )}
+        </div>
+
+        <button
+          onClick={() => {
+            onApply({ ...calc.values, calib_tasks_per_day: tasks, calib_weekly_target: target });
+            toast('Barème calculé — pense à enregistrer');
+          }}
+          className="btn-grape w-full">
+          Appliquer ce barème
+        </button>
       </div>
     </section>
   );

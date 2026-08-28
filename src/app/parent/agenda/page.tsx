@@ -10,6 +10,7 @@ import { useLive } from '@/lib/useLive';
 import { todayISO, addDaysISO, weekStart, dayShort, dowOf, hhmm, longDate, humanDuration } from '@/lib/dates';
 import { suggestCoins } from '@/lib/economy';
 import { notify } from '@/lib/actions';
+import Help from '@/components/Help';
 import { Loader, Sheet, Empty, SegmentedTabs, toast } from '@/components/ui';
 import type { Task, Routine } from '@/lib/types';
 
@@ -305,19 +306,73 @@ function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string
         </div>
       ) : (
         <div className="mt-5 space-y-5">
-          <div><label className="label">📷 Photo obligatoire</label><Tri v={d.require_photo} fb={settings.default_require_photo} on={(v) => set('require_photo', v)} /></div>
-          <div><label className="label">👁️ Validation parent</label><Tri v={d.require_validation} fb={settings.default_require_validation} on={(v) => set('require_validation', v)} /></div>
+          <p className="rounded-3xl bg-soft px-4 py-3 text-sm font-medium leading-relaxed text-muted">
+            <b className="text-ink">Auto</b> = cette tâche suit le réglage général.
+            Choisis <b className="text-ink">Oui</b> ou <b className="text-ink">Non</b> pour décider
+            uniquement pour celle-ci.
+          </p>
+
           <div>
-            <label className="label">⏱️ Minuteur · {d.min_timer_pct ?? settings.default_min_timer_pct}%</label>
+            <div className="mb-2 flex items-center gap-2">
+              <span className="text-sm font-extrabold text-ink">📷 Photo obligatoire</span>
+              <Help title="Photo obligatoire">
+                <p>Jeanne devra prendre son cahier en photo pour pouvoir valider la tâche.</p>
+                <p>Le bouton « J’ai fini » reste bloqué tant qu’elle n’a pas pris la photo.</p>
+                <p>Utile pour un exercice écrit. Inutile pour une lecture ou une révision orale.</p>
+              </Help>
+            </div>
+            <Tri v={d.require_photo} fb={settings.default_require_photo} on={(v) => set('require_photo', v)} />
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center gap-2">
+              <span className="text-sm font-extrabold text-ink">👁️ Validation parent</span>
+              <Help title="Validation parent">
+                <p>Quand Jeanne termine, la tâche vous est envoyée au lieu d’être validée tout de suite.</p>
+                <p>Elle ne reçoit ses points qu’après votre feu vert, depuis votre tableau de bord.</p>
+                <p>Attention : si vous mettez du temps à valider, la récompense arrive trop tard pour l’encourager. À réserver aux tâches qui comptent vraiment.</p>
+              </Help>
+            </div>
+            <Tri v={d.require_validation} fb={settings.default_require_validation} on={(v) => set('require_validation', v)} />
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center gap-2">
+              <span className="text-sm font-extrabold text-ink">
+                ⏱️ Minuteur · {d.min_timer_pct ?? settings.default_min_timer_pct} %
+              </span>
+              <Help title="Le minuteur, en clair">
+                <p>Quand Jeanne appuie sur « Je commence », un chronomètre démarre.</p>
+                <p>Ce réglage dit <b>combien de temps elle doit vraiment travailler</b> avant que le bouton « J’ai fini » se débloque. C’est un pourcentage de la durée que vous avez prévue.</p>
+                <p>Exemple : une tâche de 60 minutes réglée à 50 % se validera au bout de 30 minutes.</p>
+                <p>À <b>0 %</b>, elle peut cocher « fini » immédiatement, sans rien faire.</p>
+                <p>Le chronomètre ne tourne que si l’app est ouverte à l’écran. Si elle sort de l’app pour faire autre chose, le temps se met en pause et vous le voyez en direct.</p>
+              </Help>
+            </div>
             <input type="range" min={0} max={100} step={10} className="w-full accent-grape"
                    value={d.min_timer_pct ?? settings.default_min_timer_pct}
                    onChange={(e) => set('min_timer_pct', Number(e.target.value))} />
+            <p className="mt-2 text-sm font-bold text-muted">
+              Elle pourra valider après{' '}
+              {Math.round((d.duration_min * (d.min_timer_pct ?? settings.default_min_timer_pct)) / 100)} min de travail
+            </p>
           </div>
-          <button onClick={() => set('allow_postpone', !d.allow_postpone)}
-                  className={clsx('flex w-full items-center gap-3 rounded-3xl border-2 px-4 py-3.5 no-select',
-                    d.allow_postpone ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
-            <span className="text-2xl">⏭️</span><span className="font-extrabold text-ink">Report autorisé</span>
-          </button>
+
+          <div>
+            <div className="mb-2 flex items-center gap-2">
+              <span className="text-sm font-extrabold text-ink">⏭️ Report autorisé</span>
+              <Help title="Report">
+                <p>Jeanne peut repousser la tâche de quelques minutes, un nombre limité de fois par jour.</p>
+                <p>Décochez pour une tâche qui ne se négocie pas : le bouton disparaît de son écran.</p>
+              </Help>
+            </div>
+            <button onClick={() => set('allow_postpone', !d.allow_postpone)}
+                    className={clsx('flex w-full items-center gap-3 rounded-3xl border-2 px-4 py-3.5 no-select',
+                      d.allow_postpone ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
+              <span className="text-2xl">{d.allow_postpone ? '✅' : '🚫'}</span>
+              <span className="font-extrabold text-ink">{d.allow_postpone ? 'Autorisé' : 'Interdit'}</span>
+            </button>
+          </div>
         </div>
       )}
     </Sheet>
