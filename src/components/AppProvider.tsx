@@ -86,6 +86,45 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(t);
   }, [profile?.id]);
 
+  /**
+   * Synchronisation permanente des profils et des réglages.
+   * Le solde, la série, le niveau et le barème changent depuis l'autre
+   * appareil : sans cet abonnement il fallait recharger la page pour les voir.
+   */
+  useEffect(() => {
+    if (!session) return;
+    const applyProfile = (row: Profile) => {
+      setProfile((p) => (p && p.id === row.id ? { ...p, ...row } : p));
+      setChild((c) => (c && c.id === row.id ? { ...c, ...row } : c));
+    };
+    const ch = supabase
+      .channel('app-sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' },
+        (payload) => { if (payload.new && (payload.new as Profile).id) applyProfile(payload.new as Profile); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' },
+        (payload) => { if (payload.new) setSettings(payload.new as Settings); })
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [session?.user?.id]);
+
+  /**
+   * Filet de sécurité : au retour dans l'app (déverrouillage, changement
+   * d'onglet, reprise réseau), on resynchronise. Le temps réel peut avoir
+   * manqué des événements pendant la mise en veille de l'appareil.
+   */
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    const resync = () => {
+      if (document.visibilityState === 'visible') loadAll(session.user.id);
+    };
+    document.addEventListener('visibilitychange', resync);
+    window.addEventListener('online', resync);
+    return () => {
+      document.removeEventListener('visibilitychange', resync);
+      window.removeEventListener('online', resync);
+    };
+  }, [session?.user?.id, loadAll]);
+
   // Enregistrement du service worker (indispensable aux notifications iOS)
   useEffect(() => {
     if ('serviceWorker' in navigator) {

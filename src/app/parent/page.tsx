@@ -264,20 +264,33 @@ function Dashboard() {
 function KudosSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { profile, child } = useApp();
   const [custom, setCustom] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState<string | null>(null);
 
-  const send = async (emoji: string, body: string) => {
-    if (!profile || !child || !body.trim()) return;
-    setBusy(true);
-    await supabase.from('messages').insert({ from_id: profile.id, to_id: child.id, kind: 'kudos', body, emoji });
-    const { data } = await supabase.auth.getSession();
-    await fetch('/api/notify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session?.access_token ?? ''}` },
-      body: JSON.stringify({ kind: 'kudos', body, emoji }),
-    }).catch(() => {});
-    setBusy(false); setCustom(''); onClose();
+  /**
+   * Envoi optimiste : la feuille se referme immédiatement et le réseau part en
+   * arrière-plan. Attendre l'insertion puis l'appel de notification gelait
+   * l'interface une à trois secondes, pendant lesquelles les touches
+   * semblaient ne pas répondre.
+   */
+  const send = (emoji: string, body: string) => {
+    if (!profile || !child || !body.trim() || sent) return;
+    setSent(body);
     toast('Envoyé 💜');
+    setTimeout(() => { setCustom(''); setSent(null); onClose(); }, 220);
+
+    (async () => {
+      try {
+        await supabase.from('messages').insert({ from_id: profile.id, to_id: child.id, kind: 'kudos', body, emoji });
+        const { data } = await supabase.auth.getSession();
+        await fetch('/api/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session?.access_token ?? ''}` },
+          body: JSON.stringify({ kind: 'kudos', body, emoji }),
+        });
+      } catch {
+        toast('Message non envoyé, réessaie', 'err');
+      }
+    })();
   };
 
   return (
@@ -287,8 +300,9 @@ function KudosSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
       </p>
       <div className="grid grid-cols-2 gap-2.5">
         {KUDOS.map((k) => (
-          <button key={k.text} disabled={busy} onClick={() => send(k.emoji, k.text)}
-                  className="card px-3 py-4 text-center text-sm font-semibold active:scale-[.98]">
+          <button key={k.text} onClick={() => send(k.emoji, k.text)}
+                  className={clsx('card px-3 py-4 text-center text-sm font-semibold transition active:scale-[.95]',
+                    sent === k.text && 'border-mint/50 bg-mint/15')}>
             <div className="text-2xl">{k.emoji}</div>
             <div className="mt-1.5 leading-snug">{k.text}</div>
           </button>
@@ -298,7 +312,7 @@ function KudosSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
         <label className="label">Ou écris ton propre message</label>
         <textarea className="field min-h-[80px]" value={custom} onChange={(e) => setCustom(e.target.value)}
                   placeholder="Un mot rien que pour elle…" />
-        <button disabled={busy || !custom.trim()} onClick={() => send('💜', custom)} className="btn-primary mt-3 w-full">
+        <button disabled={!custom.trim() || !!sent} onClick={() => send('💜', custom)} className="btn-primary mt-3 w-full">
           Envoyer
         </button>
       </div>

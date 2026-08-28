@@ -64,7 +64,7 @@ async function viaGroq(base64: string, mime: string, hint: string): Promise<Quiz
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
     body: JSON.stringify({
-      model: process.env.GROQ_MODEL || 'meta-llama/llama-4-scout-17b-16e-instruct',
+      model: process.env.GROQ_VISION_MODEL || '',
       temperature: 0.3,
       max_tokens: 4000,
       messages: [{
@@ -81,13 +81,16 @@ async function viaGroq(base64: string, mime: string, hint: string): Promise<Quiz
   return normalize(parseJSON(json.choices?.[0]?.message?.content ?? ''), 'groq');
 }
 
+/**
+ * Lecture d'une photo de leçon. Nécessite un modèle multimodal : Groq n'en
+ * propose plus depuis le retrait de Llama 4 Scout (ses modèles actuels
+ * répondent « over capacity » à toute requête contenant une image), donc on
+ * passe par Anthropic — sauf si un modèle vision Groq est explicitement fourni.
+ */
 export async function generateQuiz(base64: string, mime: string, hint = ''): Promise<QuizResult> {
-  if (process.env.ANTHROPIC_API_KEY) {
-    try { return await viaAnthropic(base64, mime, hint); }
-    catch (e) { if (!process.env.GROQ_API_KEY) throw e; }
-  }
-  if (process.env.GROQ_API_KEY) return viaGroq(base64, mime, hint);
-  throw new Error("Aucune clé IA configurée (ANTHROPIC_API_KEY ou GROQ_API_KEY).");
+  if (process.env.ANTHROPIC_API_KEY) return viaAnthropic(base64, mime, hint);
+  if (process.env.GROQ_API_KEY && process.env.GROQ_VISION_MODEL) return viaGroq(base64, mime, hint);
+  throw new Error("Le quiz par photo demande une clé ANTHROPIC_API_KEY (Groq ne lit plus les images).");
 }
 
 /** Découpe une tâche vague en micro-étapes concrètes. */
@@ -98,6 +101,27 @@ La première étape doit être ridiculement facile, pour lever le blocage du dé
 Tâche : « ${title} »${description ? `\nDétail : ${description}` : ''}
 Réponds uniquement avec un tableau JSON de chaînes, rien d'autre.`;
 
+  // Tâche purement textuelle : on la confie à Groq, qui est gratuit, et on
+  // réserve les crédits Anthropic à la lecture d'images.
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+        body: JSON.stringify({
+          model: process.env.GROQ_TEXT_MODEL || 'openai/gpt-oss-120b',
+          temperature: 0.4, max_tokens: 700,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      });
+      if (!res.ok) throw new Error(`Groq ${res.status}`);
+      const json = await res.json();
+      const t = (json.choices?.[0]?.message?.content ?? '').trim();
+      const arr = parseJSON(t.startsWith('[') ? `{"a":${t}}` : t);
+      const steps = (Array.isArray(arr) ? arr : arr.a ?? []).map(String).slice(0, 6);
+      if (steps.length) return steps;
+    } catch { /* on bascule sur Anthropic */ }
+  }
   if (process.env.ANTHROPIC_API_KEY) {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const res = await client.messages.create({
@@ -109,20 +133,5 @@ Réponds uniquement avec un tableau JSON de chaînes, rien d'autre.`;
     const arr = parseJSON(text.trim().startsWith('[') ? `{"a":${text.trim()}}` : text);
     return (Array.isArray(arr) ? arr : arr.a ?? []).map(String).slice(0, 6);
   }
-  if (process.env.GROQ_API_KEY) {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
-      body: JSON.stringify({
-        model: process.env.GROQ_TEXT_MODEL || 'llama-3.3-70b-versatile',
-        temperature: 0.4, max_tokens: 700,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
-    const json = await res.json();
-    const t = (json.choices?.[0]?.message?.content ?? '').trim();
-    const arr = parseJSON(t.startsWith('[') ? `{"a":${t}}` : t);
-    return (Array.isArray(arr) ? arr : arr.a ?? []).map(String).slice(0, 6);
-  }
-  throw new Error('Aucune clé IA configurée.');
+  throw new Error('Aucune clé IA configurée (GROQ_API_KEY ou ANTHROPIC_API_KEY).');
 }
