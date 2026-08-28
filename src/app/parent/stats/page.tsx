@@ -1,17 +1,34 @@
 'use client';
 import { useEffect, useState } from 'react';
 import clsx from 'clsx';
+import { ChevronLeft } from 'lucide-react';
 import ParentShell from '@/components/ParentShell';
 import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
-import { todayISO, addDaysISO, dayShort, dowOf, longDate } from '@/lib/dates';
-import { Loader, Stat, Bar, Empty } from '@/components/ui';
-import type { Task, Mood } from '@/lib/types';
+import { todayISO, addDaysISO, dayShort, dowOf } from '@/lib/dates';
+import { moodEmoji } from '@/lib/mood';
+import { Loader, Stat, Bar, Empty, SegmentedTabs } from '@/components/ui';
+import type { Task, Mood, Quiz, QuizAttempt, QuizQuestion } from '@/lib/types';
 
-export default function StatsPage() { return <ParentShell><Stats /></ParentShell>; }
+export default function StatsPage() { return <ParentShell><Suivi /></ParentShell>; }
 
-function Stats() {
-  const { child, settings } = useApp();
+function Suivi() {
+  const [tab, setTab] = useState<'stats' | 'quiz'>('stats');
+  return (
+    <main className="mx-auto max-w-lg px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
+      <h1 className="text-3xl font-black text-ink">Suivi</h1>
+      <div className="mt-4">
+        <SegmentedTabs value={tab} onChange={setTab}
+                       options={[{ value: 'stats', label: '📊 Activité' }, { value: 'quiz', label: '🧠 Quiz' }]} />
+      </div>
+      {tab === 'stats' ? <Activity /> : <QuizReview />}
+    </main>
+  );
+}
+
+/* ---------------------------------------------------------------- stats -- */
+function Activity() {
+  const { child } = useApp();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [moods, setMoods] = useState<Mood[]>([]);
   const [range, setRange] = useState(14);
@@ -23,7 +40,7 @@ function Stats() {
     (async () => {
       const [t, m] = await Promise.all([
         supabase.from('tasks').select('*, subject:subjects(*)').eq('child_id', child.id).gte('day', from).lte('day', todayISO()),
-        supabase.from('moods').select('*').eq('child_id', child.id).gte('day', from),
+        supabase.from('moods').select('*').eq('child_id', child.id).gte('day', from).order('day'),
       ]);
       setTasks((t.data ?? []) as Task[]);
       setMoods((m.data ?? []) as Mood[]);
@@ -31,31 +48,28 @@ function Stats() {
     })();
   }, [child?.id, range]);
 
-  if (loading || !child || !settings) return <Loader />;
+  if (loading || !child) return <Loader />;
 
   const days = Array.from({ length: range }, (_, i) => addDaysISO(todayISO(), -(range - 1 - i)));
   const byDay = days.map((d) => {
     const list = tasks.filter((t) => t.day === d && t.status !== 'skipped');
     const done = list.filter((t) => t.status === 'done' || t.status === 'submitted').length;
-    return { day: d, total: list.length, done, pct: list.length ? Math.round((done / list.length) * 100) : -1 };
+    return { day: d, pct: list.length ? Math.round((done / list.length) * 100) : -1 };
   });
 
   const total = tasks.filter((t) => t.status !== 'skipped').length;
   const done = tasks.filter((t) => t.status === 'done').length;
-  const minutes = tasks.filter((t) => t.status === 'done').reduce((n, t) => n + Math.round(t.active_seconds / 60), 0);
-  const late = tasks.filter((t) => t.status === 'missed').length;
+  const minutes = tasks.filter((t) => t.status === 'done').reduce((n, t) => n + Math.round((t.active_seconds ?? 0) / 60), 0);
   const rate = total ? Math.round((done / total) * 100) : 0;
 
-  // Par matière
-  const subjects = [...new Set(tasks.map((t) => t.subject?.name).filter(Boolean))] as string[];
-  const bySubject = subjects.map((name) => {
+  const names = [...new Set(tasks.map((t) => t.subject?.name).filter(Boolean))] as string[];
+  const bySubject = names.map((name) => {
     const list = tasks.filter((t) => t.subject?.name === name && t.status !== 'skipped');
     const d = list.filter((t) => t.status === 'done').length;
-    return { name, color: list[0]?.subject?.color ?? '#7C5CFF', emoji: list[0]?.subject?.emoji ?? '📘',
+    return { name, color: list[0]?.subject?.color ?? '#7C4DEE', emoji: list[0]?.subject?.emoji ?? '📘',
              total: list.length, done: d, pct: list.length ? Math.round((d / list.length) * 100) : 0 };
   }).sort((a, b) => a.pct - b.pct);
 
-  // Heures de meilleure réussite
   const byHour: Record<number, { d: number; t: number }> = {};
   tasks.filter((t) => t.start_time).forEach((t) => {
     const h = Number(t.start_time!.slice(0, 2));
@@ -63,108 +77,225 @@ function Stats() {
     byHour[h].t++;
     if (t.status === 'done') byHour[h].d++;
   });
-  const bestHours = Object.entries(byHour)
-    .filter(([, v]) => v.t >= 2)
+  const bestHours = Object.entries(byHour).filter(([, v]) => v.t >= 2)
     .map(([h, v]) => ({ h: Number(h), pct: Math.round((v.d / v.t) * 100), n: v.t }))
-    .sort((a, b) => b.pct - a.pct);
+    .sort((a, b) => b.pct - a.pct).slice(0, 5);
 
   return (
-    <main className="mx-auto max-w-lg space-y-5 px-4 pb-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-black tracking-tight">Suivi</h1>
-        <div className="flex gap-1.5">
-          {[7, 14, 30].map((n) => (
-            <button key={n} onClick={() => setRange(n)}
-                    className={clsx('chip', range === n && '!border-brand !bg-brand/20 !text-white')}>{n} j</button>
-          ))}
-        </div>
+    <div className="mt-5 space-y-5">
+      <div className="flex justify-center gap-2">
+        {[7, 14, 30].map((n) => (
+          <button key={n} onClick={() => setRange(n)}
+                  className={clsx('chip', range === n && '!border-grape !bg-grape-light !text-grape')}>{n} j</button>
+        ))}
       </div>
 
       <div className="flex gap-2.5">
-        <Stat emoji="✅" value={`${rate} %`} label="réussite" color={rate >= 70 ? '#2FD8A5' : rate >= 40 ? '#FFC44D' : '#FF6B6B'} />
-        <Stat emoji="📋" value={`${done}/${total}`} label="tâches" />
+        <Stat emoji="🎯" value={`${rate}%`} label="réussite" color={rate >= 70 ? '#1FC08A' : rate >= 40 ? '#F5A524' : '#F4525C'} />
+        <Stat emoji="✅" value={`${done}/${total}`} label="tâches" />
         <Stat emoji="⏱️" value={`${Math.round(minutes / 60)} h`} label="travail" />
-        <Stat emoji="🔥" value={child.streak_current} label="série" color="#FFC44D" />
+        <Stat emoji="🔥" value={child.streak_current} label="série" color="#F5A524" />
       </div>
 
       <section className="card p-4">
-        <p className="label !mb-3">Jour par jour</p>
         <div className="flex items-end gap-1" style={{ height: 110 }}>
           {byDay.map((d) => (
             <div key={d.day} className="flex flex-1 flex-col items-center gap-1">
               <div className="flex w-full flex-1 items-end">
-                <div className="w-full rounded-t-md transition-all"
-                     style={{
-                       height: d.pct < 0 ? '3px' : `${Math.max(6, d.pct)}%`,
-                       background: d.pct < 0 ? '#2A2A3C' : d.pct === 100 ? '#2FD8A5' : d.pct >= 50 ? '#7C5CFF' : '#FF6B6B',
-                       opacity: d.pct < 0 ? 0.5 : 1,
-                     }} />
+                <div className="w-full rounded-t-lg transition-all"
+                     style={{ height: d.pct < 0 ? 4 : `${Math.max(8, d.pct)}%`,
+                              background: d.pct < 0 ? '#EBE3F9' : d.pct === 100 ? '#1FC08A' : d.pct >= 50 ? '#7C4DEE' : '#F4525C' }} />
               </div>
-              <span className="text-[8px] text-muted">{dayShort(dowOf(d.day)).slice(0, 1)}</span>
+              <span className="text-[8px] font-bold text-muted">{dayShort(dowOf(d.day)).slice(0, 1)}</span>
             </div>
           ))}
         </div>
-        <p className="mt-2 text-[11px] text-muted">Hauteur = pourcentage de tâches terminées ce jour-là.</p>
       </section>
 
       {!!bySubject.length && (
         <section className="card p-4">
-          <p className="label !mb-3">Par matière</p>
+          <p className="mb-3 font-black text-ink">Par matière</p>
           <ul className="space-y-3">
             {bySubject.map((s) => (
               <li key={s.name}>
-                <div className="mb-1.5 flex justify-between text-xs">
-                  <span className="font-semibold">{s.emoji} {s.name}</span>
-                  <span className={clsx('font-bold', s.pct >= 70 ? 'text-mint' : s.pct >= 40 ? 'text-sun' : 'text-coral')}>
-                    {s.done}/{s.total} · {s.pct} %
+                <div className="mb-1.5 flex justify-between text-sm font-extrabold">
+                  <span className="text-ink">{s.emoji} {s.name}</span>
+                  <span className={clsx(s.pct >= 70 ? 'text-leaf' : s.pct >= 40 ? 'text-sun-dark' : 'text-flame')}>
+                    {s.done}/{s.total}
                   </span>
                 </div>
-                <Bar pct={s.pct} color={s.color} />
+                <Bar pct={s.pct} color={s.color} height={10} />
               </li>
             ))}
           </ul>
-          {bySubject[0] && bySubject[0].pct < 50 && (
-            <p className="mt-3 rounded-2xl border border-sun/25 bg-sun/[.07] px-3 py-2.5 text-[11px] leading-relaxed text-sun">
-              💡 {bySubject[0].emoji} {bySubject[0].name} bloque nettement plus que le reste. Souvent le signe que les
-              tâches y sont trop grosses ou trop floues — essaie de les découper davantage.
-            </p>
-          )}
         </section>
       )}
 
       {!!bestHours.length && (
         <section className="card p-4">
-          <p className="label !mb-3">Ses meilleures heures</p>
-          <ul className="space-y-2">
-            {bestHours.slice(0, 5).map((h) => (
+          <p className="mb-3 font-black text-ink">Meilleures heures</p>
+          <ul className="space-y-2.5">
+            {bestHours.map((h) => (
               <li key={h.h} className="flex items-center gap-3">
-                <span className="w-12 shrink-0 font-mono text-xs text-white/70">{String(h.h).padStart(2, '0')}:00</span>
-                <div className="flex-1"><Bar pct={h.pct} color={h.pct >= 70 ? '#2FD8A5' : '#7C5CFF'} /></div>
-                <span className="w-14 shrink-0 text-right text-[11px] text-muted">{h.pct} % · {h.n}×</span>
+                <span className="w-12 shrink-0 text-sm font-black tabular-nums text-ink">{String(h.h).padStart(2, '0')}h</span>
+                <div className="flex-1"><Bar pct={h.pct} color={h.pct >= 70 ? '#1FC08A' : '#7C4DEE'} height={10} /></div>
+                <span className="w-10 shrink-0 text-right text-xs font-bold text-muted">{h.pct}%</span>
               </li>
             ))}
           </ul>
-          <p className="mt-3 text-[11px] leading-relaxed text-muted">
-            Programme les matières les plus difficiles sur ses créneaux les plus fiables.
-          </p>
         </section>
       )}
 
       {!!moods.length && (
         <section className="card p-4">
-          <p className="label !mb-3">Humeur</p>
-          <div className="flex gap-1.5">
-            {moods.slice(-14).map((m) => (
-              <div key={m.id} className="flex-1 text-center">
-                <div className="text-lg">{['', '😞', '😕', '😐', '🙂', '😄'][m.mood]}</div>
-                <div className="text-[8px] text-muted">{m.day.slice(-2)}</div>
+          <p className="mb-3 font-black text-ink">Humeur</p>
+          <div className="flex flex-wrap gap-2">
+            {moods.slice(-21).map((m) => (
+              <div key={m.id} className="text-center">
+                <div className="text-2xl">{moodEmoji(m.code, m.mood)}</div>
+                <div className="text-[9px] font-bold text-muted">{m.day.slice(-2)}</div>
               </div>
             ))}
           </div>
         </section>
       )}
 
-      {total === 0 && <Empty emoji="📊" title="Pas encore de données" hint="Les statistiques apparaîtront après quelques jours." />}
-    </main>
+      {total === 0 && <Empty emoji="📊" title="Pas encore de données" />}
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------- quiz -- */
+function QuizReview() {
+  const { child } = useApp();
+  const [list, setList] = useState<(Quiz & { attempts: QuizAttempt[] })[]>([]);
+  const [open, setOpen] = useState<(Quiz & { attempts: QuizAttempt[] }) | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!child) return;
+    (async () => {
+      const [q, a] = await Promise.all([
+        supabase.from('quizzes').select('*').eq('child_id', child.id).order('created_at', { ascending: false }),
+        supabase.from('quiz_attempts').select('*').eq('child_id', child.id).order('created_at', { ascending: false }),
+      ]);
+      const attempts = (a.data ?? []) as QuizAttempt[];
+      setList(((q.data ?? []) as Quiz[]).map((x) => ({ ...x, attempts: attempts.filter((t) => t.quiz_id === x.id) })));
+      setLoading(false);
+    })();
+  }, [child?.id]);
+
+  if (loading) return <Loader />;
+  if (open) return <QuizDetail quiz={open} onBack={() => setOpen(null)} />;
+  if (!list.length) return <div className="mt-5"><Empty emoji="🧠" title="Aucun quiz" /></div>;
+
+  return (
+    <ul className="stagger mt-5 space-y-3">
+      {list.map((q) => {
+        const best = Math.max(0, ...q.attempts.map((a) => (a.total ? Math.round((a.score / a.total) * 100) : 0)));
+        const last = q.attempts[0];
+        return (
+          <li key={q.id}>
+            <button onClick={() => setOpen(q)} className="card w-full p-4 text-left no-select active:scale-[.99]">
+              <div className="flex items-center gap-3">
+                <span className="text-3xl">📘</span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-extrabold text-ink">{q.title}</p>
+                  <p className="text-xs font-bold text-muted">
+                    {q.attempts.length} tentative{q.attempts.length > 1 ? 's' : ''}
+                    {last && ` · dernière ${new Date(last.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}`}
+                  </p>
+                </div>
+                {q.attempts.length > 0 && (
+                  <span className={clsx('shrink-0 text-lg font-black',
+                    best >= 70 ? 'text-leaf' : best >= 40 ? 'text-sun-dark' : 'text-flame')}>{best}%</span>
+                )}
+              </div>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function QuizDetail({ quiz, onBack }: { quiz: Quiz & { attempts: QuizAttempt[] }; onBack: () => void }) {
+  const qs = quiz.questions as QuizQuestion[];
+  const [sel, setSel] = useState<QuizAttempt | null>(quiz.attempts[0] ?? null);
+  const chrono = [...quiz.attempts].reverse();
+
+  return (
+    <div className="mt-5 space-y-5">
+      <button onClick={onBack} className="chip"><ChevronLeft size={14} /> Retour</button>
+      <h2 className="text-2xl font-black text-ink">{quiz.title}</h2>
+
+      {chrono.length > 1 && (
+        <section className="card p-4">
+          <p className="mb-3 font-black text-ink">Progression</p>
+          <div className="flex items-end gap-2" style={{ height: 90 }}>
+            {chrono.map((a) => {
+              const pct = a.total ? Math.round((a.score / a.total) * 100) : 0;
+              return (
+                <div key={a.id} className="flex flex-1 flex-col items-center gap-1">
+                  <span className="text-[10px] font-black text-ink">{pct}%</span>
+                  <div className="flex w-full flex-1 items-end">
+                    <div className="w-full rounded-t-lg"
+                         style={{ height: `${Math.max(8, pct)}%`, background: pct >= 70 ? '#1FC08A' : pct >= 40 ? '#F5A524' : '#F4525C' }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {quiz.attempts.length === 0 ? (
+        <Empty emoji="⏳" title="Jamais tenté" />
+      ) : (
+        <>
+          <div className="scroll-x flex gap-2">
+            {quiz.attempts.map((a) => {
+              const pct = a.total ? Math.round((a.score / a.total) * 100) : 0;
+              return (
+                <button key={a.id} onClick={() => setSel(a)}
+                        className={clsx('shrink-0 rounded-3xl border-2 px-4 py-2.5 text-left no-select',
+                          sel?.id === a.id ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
+                  <p className="text-sm font-black text-ink">{a.score}/{a.total} · {pct}%</p>
+                  <p className="text-[10px] font-bold text-muted">
+                    {new Date(a.created_at).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+
+          {sel && (
+            <ul className="space-y-3">
+              {qs.map((q, i) => {
+                const given = (sel.answers as number[])[i];
+                const ok = given === q.answer;
+                return (
+                  <li key={i} className={clsx('card border-2 p-4', ok ? 'border-leaf' : 'border-flame')}>
+                    <p className="font-extrabold text-ink">{ok ? '✅' : '❌'} {q.q}</p>
+                    <div className="mt-2.5 space-y-1.5">
+                      {q.choices.map((c, k) => (
+                        <p key={k}
+                           className={clsx('rounded-2xl px-3 py-2 text-sm font-bold',
+                             k === q.answer ? 'bg-leaf-light text-leaf-dark'
+                             : k === given ? 'bg-flame-light text-flame-dark'
+                             : 'text-muted')}>
+                          {k === q.answer ? '✓ ' : k === given ? '✗ ' : ''}{c}
+                        </p>
+                      ))}
+                    </div>
+                    {q.why && <p className="mt-2.5 rounded-2xl bg-sky-light px-3 py-2 text-sm font-bold text-ink">💡 {q.why}</p>}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
   );
 }

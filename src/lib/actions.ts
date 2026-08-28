@@ -1,11 +1,11 @@
 'use client';
 import { supabase } from '@/lib/supabase';
-import { computeAward, dayIsComplete, badgesToUnlock } from '@/lib/economy';
+import { computeAward, dayIsComplete, badgesToUnlock, levelOf } from '@/lib/economy';
 import { todayISO, addDaysISO, toMinutes, nowMinutes, fromMinutes } from '@/lib/dates';
 import type { Profile, Settings, Task } from '@/lib/types';
 
-/** Prévient l'autre membre de la famille (route serveur → Web Push). */
-export async function notify(kind: string, payload: Record<string, unknown>) {
+/** Envoie une notification à l'autre membre de la famille. Ne bloque jamais l'action. */
+export async function notify(kind: string, payload: Record<string, unknown> = {}) {
   try {
     const { data } = await supabase.auth.getSession();
     await fetch('/api/notify', {
@@ -13,15 +13,38 @@ export async function notify(kind: string, payload: Record<string, unknown>) {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session?.access_token ?? ''}` },
       body: JSON.stringify({ kind, ...payload }),
     });
-  } catch { /* une notification perdue ne doit jamais bloquer l'action */ }
+  } catch { /* une notification perdue ne doit pas casser l'action */ }
+}
+
+/* ------------------------------------------------------------- minuteur -- */
+
+/** Secondes réellement travaillées : le segment en cours ne compte que s'il tourne. */
+export function elapsedOf(task: Task): number {
+  const base = task.active_seconds ?? 0;
+  if (!task.timer_running || !task.timer_segment_at) return base;
+  return base + Math.max(0, Math.floor((Date.now() - new Date(task.timer_segment_at).getTime()) / 1000));
 }
 
 export async function startTask(task: Task) {
-  await supabase.from('tasks').update({ status: 'doing', started_at: new Date().toISOString() }).eq('id', task.id);
+  await supabase.from('tasks').update({
+    status: 'doing',
+    started_at: task.started_at ?? new Date().toISOString(),
+    timer_running: true,
+    timer_segment_at: new Date().toISOString(),
+  }).eq('id', task.id);
 }
 
-export async function saveActiveSeconds(taskId: string, seconds: number) {
-  await supabase.from('tasks').update({ active_seconds: seconds }).eq('id', taskId);
+/** Met le chrono en pause et fige le total. Appelé dès que l'enfant quitte la page. */
+export async function pauseTimer(taskId: string, seconds: number) {
+  await supabase.from('tasks').update({
+    timer_running: false, timer_segment_at: null, active_seconds: Math.round(seconds),
+  }).eq('id', taskId);
+}
+
+export async function resumeTimer(taskId: string, seconds: number) {
+  await supabase.from('tasks').update({
+    timer_running: true, timer_segment_at: new Date().toISOString(), active_seconds: Math.round(seconds),
+  }).eq('id', taskId);
 }
 
 export async function toggleSubtask(id: string, done: boolean) {
@@ -33,9 +56,15 @@ export async function postponeTask(task: Task, s: Settings) {
   await supabase.from('tasks').update({
     start_time: fromMinutes(cur + s.postpone_minutes),
     postpone_count: task.postpone_count + 1,
-    reminders_sent: [],
-    parent_alerted: false,
+    reminders_sent: [], parent_alerted: false,
   }).eq('id', task.id);
+}
+
+/** L'enfant place elle-même une tâche libre dans sa journée. */
+export async function scheduleTask(taskId: string, time: string) {
+  await supabase.from('tasks').update({
+    start_time: time, reminders_sent: [], parent_alerted: false,
+  }).eq('id', taskId);
 }
 
 export async function reportBlocked(task: Task, note: string, childId: string, parentId: string | null) {
@@ -49,12 +78,15 @@ export async function reportBlocked(task: Task, note: string, childId: string, p
   await notify('blocked', { taskId: task.id, note });
 }
 
-export interface AwardResult { coins: number; xp: number; bonuses: { label: string; pct: number }[]; badges: string[]; perfectDay: boolean; }
+/* ------------------------------------------------------------ validation -- */
 
-/**
- * Termine une tâche : applique les règles du parent, crédite, met à jour la série
- * et débloque les badges. Renvoie de quoi afficher l'écran de récompense.
- */
+export interface AwardResult {
+  coins: number; xp: number;
+  bonuses: { label: string; pct: number }[];
+  badges: string[]; perfectDay: boolean;
+  levelUp: number | null;
+}
+
 export async function completeTask(
   task: Task, s: Settings, child: Profile,
   opts: { proofUrl?: string | null; note?: string | null; needsValidation: boolean }
@@ -64,23 +96,23 @@ export async function completeTask(
     completed_at: now.toISOString(),
     proof_url: opts.proofUrl ?? null,
     child_note: opts.note ?? null,
+    timer_running: false,
+    timer_segment_at: null,
   };
 
   if (opts.needsValidation) {
     await supabase.from('tasks').update({ ...base, status: 'submitted' }).eq('id', task.id);
-    await notify('submitted', { taskId: task.id });
+    await notify('task_submitted', { taskId: task.id });
     return null;
   }
 
   const onTime = (() => {
     const planned = toMinutes(task.start_time);
     if (planned === null || !task.started_at) return true;
-    const startedMin = nowMinutes(new Date(task.started_at));
-    return startedMin <= planned + 5;
+    return nowMinutes(new Date(task.started_at)) <= planned + 5;
   })();
 
   const award = computeAward(s, task, { onTime, streak: child.streak_current });
-
   await supabase.from('tasks').update({
     ...base, status: 'done', validated_at: now.toISOString(),
     coins_awarded: award.coins, xp_awarded: award.xp,
@@ -90,48 +122,62 @@ export async function completeTask(
   return { ...award, ...extra };
 }
 
-/** Crédite, recalcule la série, la journée parfaite et les badges. */
+/** Crédite, met à jour série, journée parfaite, niveau et badges. */
 export async function settleDay(
   task: Task, s: Settings, child: Profile,
   coins: number, xp: number, reason: string, refId: string
-): Promise<{ badges: string[]; perfectDay: boolean }> {
+): Promise<{ badges: string[]; perfectDay: boolean; levelUp: number | null }> {
   let totalCoins = coins;
   const today = todayISO();
 
   await supabase.from('ledger').insert({ child_id: child.id, amount: coins, reason, kind: 'task', ref_id: refId });
 
-  // La journée est-elle complète ?
   const { data: dayTasks } = await supabase.from('tasks').select('*').eq('child_id', child.id).eq('day', task.day);
   const complete = dayIsComplete((dayTasks ?? []) as Task[]);
 
   let streak = child.streak_current;
   let perfectDay = false;
-
   if (complete && task.day === today && child.last_streak_day !== today) {
     perfectDay = true;
     streak = child.last_streak_day === addDaysISO(today, -1) ? child.streak_current + 1 : 1;
     totalCoins += s.perfect_day_bonus;
     await supabase.from('ledger').insert({
-      child_id: child.id, amount: s.perfect_day_bonus,
-      reason: 'Journée parfaite 💎', kind: 'bonus',
+      child_id: child.id, amount: s.perfect_day_bonus, reason: 'Journée parfaite 💎', kind: 'bonus',
     });
   }
 
-  const newCoins = child.coins + totalCoins;
+  // Montée de niveau
   const newXp = child.xp + xp;
+  const before = levelOf(child.xp, s.xp_per_level).level;
+  const after = levelOf(newXp, s.xp_per_level).level;
+  let levelUp: number | null = null;
+  if (after > before) {
+    levelUp = after;
+    const bonus = (s.level_up_coins ?? 0) * (after - before);
+    if (bonus > 0) {
+      totalCoins += bonus;
+      await supabase.from('ledger').insert({
+        child_id: child.id, amount: bonus, reason: `Niveau ${after} atteint 🎉`, kind: 'bonus',
+      });
+    }
+    notify('level_up', { level: after });
+  }
+
   await supabase.from('profiles').update({
-    coins: newCoins, xp: newXp,
+    coins: child.coins + totalCoins,
+    xp: newXp,
+    level_reached: after,
     streak_current: streak,
     streak_best: Math.max(child.streak_best, streak),
     ...(perfectDay ? { last_streak_day: today } : {}),
   }).eq('id', child.id);
 
-  const badges = await checkBadges(child.id, streak);
-  return { badges, perfectDay };
+  const badges = await checkBadges(child.id, streak, after);
+  return { badges, perfectDay, levelUp };
 }
 
 /** Débloque les badges atteints et crédite leur bonus. */
-export async function checkBadges(childId: string, streak: number): Promise<string[]> {
+export async function checkBadges(childId: string, streak: number, level = 1): Promise<string[]> {
   const [{ data: all }, { data: owned }, { count: tasksTotal }, { data: perfect }, { data: attempts }, { count: contractsDone }] =
     await Promise.all([
       supabase.from('badges').select('*'),
@@ -144,29 +190,38 @@ export async function checkBadges(childId: string, streak: number): Promise<stri
 
   const ownedSet = new Set((owned ?? []).map((b: any) => b.code));
   const bestQuiz = Math.max(0, ...(attempts ?? []).map((a: any) => (a.total ? Math.round((a.score / a.total) * 100) : 0)));
-  const { count: earlyStarts } = await supabase
-    .from('tasks').select('id', { count: 'exact', head: true })
-    .eq('child_id', childId).eq('status', 'done').not('started_at', 'is', null);
 
   const unlocked = badgesToUnlock(all ?? [], ownedSet, {
-    streak,
+    streak, level,
     tasksTotal: tasksTotal ?? 0,
     perfectDays: (perfect ?? []).length,
     bestQuiz,
-    earlyStarts: Math.floor((earlyStarts ?? 0) / 3),
+    earlyStarts: 0,
     contractsDone: contractsDone ?? 0,
   });
-
   if (!unlocked.length) return [];
-  await supabase.from('earned_badges').insert(unlocked.map((code) => ({ child_id: childId, code })));
 
+  await supabase.from('earned_badges').insert(unlocked.map((code) => ({ child_id: childId, code })));
   const bonus = (all ?? []).filter((b: any) => unlocked.includes(b.code)).reduce((n: number, b: any) => n + b.coins_reward, 0);
   if (bonus > 0) {
     const { data: p } = await supabase.from('profiles').select('coins').eq('id', childId).maybeSingle();
     await supabase.from('profiles').update({ coins: (p?.coins ?? 0) + bonus }).eq('id', childId);
-    await supabase.from('ledger').insert({ child_id: childId, amount: bonus, reason: `Badge${unlocked.length > 1 ? 's' : ''} débloqué${unlocked.length > 1 ? 's' : ''}`, kind: 'bonus' });
+    await supabase.from('ledger').insert({ child_id: childId, amount: bonus, reason: 'Badge débloqué', kind: 'bonus' });
   }
+  notify('badge', { codes: unlocked });
   return unlocked;
+}
+
+/* ------------------------------------------------------------- parent ---- */
+
+/** Ajustement manuel du solde : le parent garde toujours la main. */
+export async function adjustBalance(child: Profile, amount: number, reason: string) {
+  const next = Math.max(0, child.coins + amount);
+  await supabase.from('profiles').update({ coins: next }).eq('id', child.id);
+  await supabase.from('ledger').insert({
+    child_id: child.id, amount, kind: 'manual',
+    reason: reason.trim() || (amount >= 0 ? 'Ajout du parent' : 'Retrait du parent'),
+  });
 }
 
 /** Téléverse une photo de preuve dans le bucket public `proofs`. */

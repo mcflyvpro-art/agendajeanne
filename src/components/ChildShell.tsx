@@ -3,16 +3,15 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 import clsx from 'clsx';
-import { Target, CalendarDays, ShoppingBag, Brain, User } from 'lucide-react';
 import { useApp } from '@/components/AppProvider';
 import { Loader, Toaster } from '@/components/ui';
 
 const TABS = [
-  { href: '/now', label: 'Maintenant', Icon: Target },
-  { href: '/day', label: 'Journée', Icon: CalendarDays },
-  { href: '/quiz', label: 'Quiz', Icon: Brain },
-  { href: '/shop', label: 'Boutique', Icon: ShoppingBag },
-  { href: '/me', label: 'Moi', Icon: User },
+  { href: '/now',   label: 'Aujourd’hui', emoji: '🎯' },
+  { href: '/day',   label: 'Semaine',     emoji: '🗓️' },
+  { href: '/quiz',  label: 'Quiz',        emoji: '🧠' },
+  { href: '/shop',  label: 'Boutique',    emoji: '🎁' },
+  { href: '/me',    label: 'Moi',         emoji: '⭐' },
 ];
 
 export default function ChildShell({ children }: { children: React.ReactNode }) {
@@ -29,19 +28,19 @@ export default function ChildShell({ children }: { children: React.ReactNode }) 
   if (loading || !profile) return <Loader />;
 
   return (
-    <div className="min-h-dvh pb-24">
+    <div className="min-h-dvh pb-28">
       <Toaster />
       {children}
-      <nav className="tabbar fixed inset-x-0 bottom-0 z-40 border-t border-line">
-        <div className="mx-auto flex max-w-lg">
-          {TABS.map(({ href, label, Icon }) => {
+      <nav className="tabbar fixed inset-x-0 bottom-0 z-40">
+        <div className="mx-auto flex max-w-lg px-2 pt-2">
+          {TABS.map(({ href, label, emoji }) => {
             const active = path === href || path.startsWith(href + '/');
             return (
               <Link key={href} href={href}
-                    className={clsx('flex flex-1 flex-col items-center gap-1 py-2.5 no-select transition',
-                      active ? 'text-brand' : 'text-muted')}>
-                <Icon size={21} strokeWidth={active ? 2.5 : 2} />
-                <span className="text-[10px] font-semibold">{label}</span>
+                    className={clsx('flex flex-1 flex-col items-center gap-1 rounded-2xl py-2 no-select transition',
+                      active ? 'bg-grape-light' : '')}>
+                <span className={clsx('text-2xl transition', active && 'scale-110')}>{emoji}</span>
+                <span className={clsx('text-[10px] font-extrabold', active ? 'text-grape' : 'text-muted')}>{label}</span>
               </Link>
             );
           })}

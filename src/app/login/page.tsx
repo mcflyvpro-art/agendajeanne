@@ -19,7 +19,7 @@ export default function Login() {
     setBusy(true);
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pw });
     setBusy(false);
-    if (error) toast(error.message === 'Invalid login credentials' ? 'Email ou mot de passe incorrect' : error.message, 'err');
+    if (error) toast('Email ou mot de passe incorrect', 'err');
     else router.replace('/');
   }
 
@@ -28,33 +28,25 @@ export default function Login() {
       <Toaster />
       <div className="mx-auto w-full max-w-sm animate-rise">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-5 grid h-20 w-20 place-items-center rounded-[26px] bg-gradient-to-b from-brand to-mint text-4xl shadow-2xl shadow-brand/30">
-            📓
-          </div>
-          <h1 className="text-2xl font-black tracking-tight">Agenda Jeanne</h1>
-          <p className="mt-1 text-sm text-muted">Connecte-toi pour continuer</p>
+          <img src="/icons/icon-192.png" alt="" className="mx-auto h-24 w-24 animate-bob rounded-[26px] shadow-lift" />
+          <h1 className="mt-5 text-3xl font-black text-ink">Agenda Jeanne</h1>
         </div>
 
         <form onSubmit={submit} className="card space-y-4 p-5">
           <div>
             <label className="label">Email</label>
             <input className="field" type="email" inputMode="email" autoCapitalize="none" autoComplete="username"
-                   value={email} onChange={(e) => setEmail(e.target.value)} placeholder="jeanne@gmail.com" required />
+                   value={email} onChange={(e) => setEmail(e.target.value)} required />
           </div>
           <div>
             <label className="label">Mot de passe</label>
             <input className="field" type="password" autoComplete="current-password"
-                   value={pw} onChange={(e) => setPw(e.target.value)} placeholder="••••••••" required />
+                   value={pw} onChange={(e) => setPw(e.target.value)} required />
           </div>
-          <button className="btn-primary w-full" disabled={busy}>
-            {busy ? 'Connexion…' : 'Se connecter'}
+          <button className="btn-grape btn-lg w-full" disabled={busy}>
+            {busy ? '…' : 'C’est parti'}
           </button>
         </form>
-
-        <p className="mt-6 px-4 text-center text-xs leading-relaxed text-muted">
-          Pour recevoir les rappels, ajoute l’app à ton écran d’accueil :<br />
-          <span className="text-white/70">bouton Partager de Safari → « Sur l’écran d’accueil »</span>
-        </p>
       </div>
     </main>
   );

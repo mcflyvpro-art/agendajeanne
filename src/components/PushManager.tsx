@@ -15,16 +15,9 @@ const isStandalone = () =>
   typeof window !== 'undefined' &&
   (window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true);
 
-/** iOS Safari exige l'installation sur l'écran d'accueil pour le push. Android/Chrome/desktop n'en ont pas besoin. */
 const isIOS = () =>
   typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent) && !(window as any).MSStream;
 
-/**
- * Bannière d'activation des notifications.
- * Sur iOS, le push ne fonctionne QUE si la PWA est installée sur l'écran d'accueil :
- * on le dit explicitement plutôt que d'échouer en silence. Sur Android et desktop,
- * l'installation n'est pas requise — la permission peut être demandée directement.
- */
 export default function PushManager() {
   const { profile, refresh } = useApp();
   const [state, setState] = useState<'unknown' | 'ok' | 'need-install' | 'need-permission' | 'denied'>('unknown');
@@ -37,16 +30,13 @@ export default function PushManager() {
     }
     if (isIOS() && !isStandalone()) { setState('need-install'); return; }
     if (Notification.permission === 'denied') { setState('denied'); return; }
-
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.getSubscription();
-    if (sub && profile.push_enabled) { setState('ok'); return; }
-    setState(sub ? 'need-permission' : 'need-permission');
+    setState(sub && profile.push_enabled ? 'ok' : 'need-permission');
   }, [profile]);
 
   useEffect(() => { check(); }, [check]);
 
-  // Détecte une désactivation côté iOS et prévient le parent (via push_enabled = false).
   useEffect(() => {
     if (!profile || state === 'unknown') return;
     const enabled = state === 'ok';
@@ -61,7 +51,7 @@ export default function PushManager() {
     setBusy(true);
     try {
       const perm = await Notification.requestPermission();
-      if (perm !== 'granted') { setState('denied'); toast('Notifications refusées', 'err'); return; }
+      if (perm !== 'granted') { setState('denied'); return; }
       const reg = await navigator.serviceWorker.ready;
       let sub = await reg.pushManager.getSubscription();
       if (!sub) {
@@ -70,47 +60,33 @@ export default function PushManager() {
           applicationServerKey: urlB64ToUint8Array(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!),
         });
       }
-      const { error } = await supabase.from('profiles')
+      await supabase.from('profiles')
         .update({ push_subscription: sub.toJSON(), push_enabled: true, push_checked_at: new Date().toISOString() })
         .eq('id', profile!.id);
-      if (error) throw error;
       setState('ok');
       await refresh();
-      toast('Notifications activées ✅');
+      toast('Notifications activées');
     } catch (e: any) {
-      toast(e.message ?? 'Échec de l’activation', 'err');
+      toast('Échec de l’activation', 'err');
     } finally { setBusy(false); }
   };
 
   if (state === 'ok' || state === 'unknown') return null;
 
   return (
-    <div className="card border-sun/30 bg-sun/[.08] p-4">
+    <div className="card border-2 border-sun bg-sun-light p-4">
       {state === 'need-install' ? (
-        <>
-          <p className="text-sm font-bold text-sun">📲 Ajoute l’app à ton écran d’accueil</p>
-          <p className="mt-1.5 text-xs leading-relaxed text-white/70">
-            Sur iPhone, les rappels ne fonctionnent que si l’app est installée.
-            Appuie sur <b>Partager</b> en bas de Safari, puis <b>« Sur l’écran d’accueil »</b>.
-            Rouvre ensuite l’app depuis l’icône.
-          </p>
-        </>
+        <p className="text-sm font-extrabold text-ink">
+          📲 Partager → « Sur l’écran d’accueil », puis rouvrir depuis l’icône
+        </p>
       ) : state === 'denied' ? (
-        <>
-          <p className="text-sm font-bold text-coral">🔕 Notifications bloquées</p>
-          <p className="mt-1.5 text-xs leading-relaxed text-white/70">
-            {isIOS()
-              ? <>Va dans <b>Réglages iPhone → Notifications → Agenda</b> et autorise-les, sinon aucun rappel n’arrivera.</>
-              : <>Ouvre les paramètres du site (icône 🔒 ou ⓘ à côté de l’adresse) → <b>Notifications → Autoriser</b>, sinon aucun rappel n’arrivera.</>}
-          </p>
-        </>
+        <p className="text-sm font-extrabold text-ink">
+          🔕 Notifications bloquées {isIOS() ? '— Réglages → Notifications → Agenda' : '— paramètres du site → Notifications'}
+        </p>
       ) : (
         <>
-          <p className="text-sm font-bold text-sun">🔔 Active les rappels</p>
-          <p className="mt-1.5 text-xs leading-relaxed text-white/70">Sans ça, tu ne recevras aucune notification.</p>
-          <button onClick={enable} disabled={busy} className="btn-primary mt-3 w-full">
-            {busy ? 'Activation…' : 'Activer les notifications'}
-          </button>
+          <p className="text-center text-sm font-extrabold text-ink">🔔 Rappels désactivés</p>
+          <button onClick={enable} disabled={busy} className="btn-sun mt-3 w-full">Activer</button>
         </>
       )}
     </div>

@@ -51,6 +51,10 @@ async function run(req: Request) {
   const pushParents = (c: { title: string; body: string }, kind: string, url = '/parent') =>
     Promise.all(parents.map((p) => push(p, c, kind, url)));
 
+  /** Le parent et l'enfant choisissent chacun ce qu'ils reçoivent. */
+  const wantsParent = (k: string) => (s.notif_parent as any)?.[k] !== false;
+  const wantsChild  = (k: string) => (s.notif_child  as any)?.[k] !== false;
+
   /** Verrou « une fois par jour » basé sur engine_log. */
   const once = async (key: string): Promise<boolean> => {
     const { data } = await db.from('engine_log').select('id').eq('kind', key).limit(1);
@@ -97,7 +101,7 @@ async function run(req: Request) {
         const copy = notifCopy(kind, s.notif_tone, {
           task: t.title, minutes: off < 0 ? -off : off, time: hhmm(t.start_time),
         }, seed + Math.abs(off));
-        if (child.push_enabled) await push(child, copy, kind, '/now');
+        if (child.push_enabled && wantsChild('reminders')) await push(child, copy, kind, '/now');
         await db.from('tasks').update({ reminders_sent: [...t.reminders_sent, off] }).eq('id', t.id);
         t.reminders_sent.push(off);
       }
@@ -108,14 +112,16 @@ async function run(req: Request) {
       const elapsed = (Date.now() - new Date(t.started_at).getTime()) / 60000;
       if (elapsed >= t.duration_min / 2) {
         const copy = notifCopy('midway', s.notif_tone, { task: t.title, minutes: Math.max(1, Math.round(t.duration_min - elapsed)) }, seed);
-        if (child.push_enabled) await push(child, copy, 'midway', '/now');
+        if (child.push_enabled && wantsChild('reminders')) await push(child, copy, 'midway', '/now');
         await db.from('tasks').update({ reminders_sent: [...t.reminders_sent, MIDWAY] }).eq('id', t.id);
       }
     }
 
     // Escalade vers le parent
     if (t.status === 'todo' && !t.parent_alerted && now >= start + s.parent_alert_after) {
-      await pushParents(parentCopy.notStarted(child.display_name, t.title, now - start), 'alert');
+      if (wantsParent('not_started')) {
+        await pushParents(parentCopy.notStarted(child.display_name, t.title, now - start), 'alert');
+      }
       await db.from('tasks').update({ parent_alerted: true }).eq('id', t.id);
       await db.from('messages').insert({
         to_id: parents[0]?.id, task_id: t.id, kind: 'alert', emoji: '🔴',
@@ -131,7 +137,7 @@ async function run(req: Request) {
   // Réveil / début de journée
   if (inWindow(at(s.morning_checkin_time)) && await once(`morning-${today}`)) {
     const todo = tasks.filter((t) => t.status === 'todo');
-    if (todo.length && child.push_enabled) {
+    if (todo.length && child.push_enabled && wantsChild('reminders')) {
       const first = todo.slice().sort((a, b) => (toMinutes(a.start_time) ?? 1e9) - (toMinutes(b.start_time) ?? 1e9))[0];
       await push(child, notifCopy('morning', s.notif_tone, {
         count: todo.length, first: first.title, time: hhmm(first.start_time) || 'quand tu veux',
@@ -144,7 +150,7 @@ async function run(req: Request) {
     const tomorrow = addDaysISO(today, 1);
     const { data: tw } = await db.from('tasks').select('title,start_time')
       .eq('child_id', child.id).eq('day', tomorrow).eq('status', 'todo').order('start_time');
-    if (tw?.length && child.push_enabled) {
+    if (tw?.length && child.push_enabled && wantsChild('reminders')) {
       await push(child, notifCopy('preview', s.notif_tone, {
         count: tw.length, first: tw[0].title, time: hhmm(tw[0].start_time) || 'libre',
       }, seed), 'preview', '/day');
@@ -155,12 +161,12 @@ async function run(req: Request) {
   if (inWindow(at(s.evening_recap_time)) && await once(`recap-${today}`)) {
     const done = tasks.filter((t) => t.status === 'done');
     const coins = done.reduce((n, t) => n + (t.coins_awarded ?? 0), 0);
-    if (child.push_enabled) {
+    if (child.push_enabled && wantsChild('reminders')) {
       await push(child, notifCopy('recap', s.notif_tone, {
         count: done.length, coins, currency: s.currency_emoji, streak: child.streak_current,
       }, seed), 'recap', '/me');
     }
-    await pushParents({
+    if (wantsParent('recap')) await pushParents({
       title: `📊 Bilan de ${child.display_name}`,
       body: `${done.length}/${tasks.filter((t) => t.status !== 'skipped').length} tâches · ${coins} ${s.currency_emoji} · série ${child.streak_current} j`,
     }, 'recap');

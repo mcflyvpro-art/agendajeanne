@@ -18,6 +18,7 @@ export interface Profile {
   push_enabled: boolean;
   push_checked_at: string | null;
   last_seen_at: string | null;
+  level_reached: number;
 }
 
 export interface Settings {
@@ -51,7 +52,21 @@ export interface Settings {
   timezone: string;
   goal_title: string;
   goal_date: string | null;
+  xp_per_task: number;
+  xp_per_quiz_answer: number;
+  level_up_coins: number;
+  daily_xp_goal: number;
+  notif_parent: Record<ParentNotifKind, boolean>;
+  notif_child: Record<ChildNotifKind, boolean>;
 }
+
+export type ParentNotifKind =
+  | 'task_submitted' | 'quiz_done' | 'purchase' | 'badge'
+  | 'level_up' | 'blocked' | 'mood' | 'not_started' | 'recap';
+
+export type ChildNotifKind =
+  | 'task_created' | 'kudos' | 'reward_created' | 'contract_created'
+  | 'reminders' | 'validation' | 'level_up';
 
 export interface Subject { id: string; name: string; emoji: string; color: string; position: number; active: boolean; }
 
@@ -93,6 +108,8 @@ export interface Task {
   parent_reaction: string | null;
   reminders_sent: number[];
   parent_alerted: boolean;
+  timer_running: boolean;
+  timer_segment_at: string | null;
   created_at: string;
   subtasks?: Subtask[];
   subject?: Subject | null;
@@ -142,7 +159,7 @@ export interface Message {
   body: string; emoji: string | null; read_at: string | null; created_at: string;
 }
 
-export interface Mood { id: string; child_id: string; day: string; mood: number; note: string | null; }
+export interface Mood { id: string; child_id: string; day: string; mood: number; code: string | null; note: string | null; created_at?: string; }
 
 export interface QuizQuestion {
   q: string;

@@ -1,13 +1,14 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
-import { Plus, Trash2, Copy, Sparkles, Repeat, GripVertical, X, AlertTriangle } from 'lucide-react';
+import { Plus, Trash2, Copy, Sparkles, Repeat, X } from 'lucide-react';
 import ParentShell from '@/components/ParentShell';
 import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
 import { useDay } from '@/lib/useDay';
 import { todayISO, addDaysISO, weekStart, dayShort, dowOf, hhmm, longDate, humanDuration } from '@/lib/dates';
 import { suggestCoins } from '@/lib/economy';
+import { notify } from '@/lib/actions';
 import { Loader, Sheet, Empty, SegmentedTabs, toast } from '@/components/ui';
 import type { Task, Routine } from '@/lib/types';
 
@@ -35,85 +36,69 @@ function Agenda() {
   const [routines, setRoutines] = useState(false);
   const [copyOpen, setCopyOpen] = useState(false);
 
-  const week = useMemo(() => {
-    const ws = weekStart(day);
-    return Array.from({ length: 7 }, (_, i) => addDaysISO(ws, i));
-  }, [day]);
-
+  const week = useMemo(() => Array.from({ length: 7 }, (_, i) => addDaysISO(weekStart(day), i)), [day]);
   const load = useMemo(() => tasks.reduce((n, t) => n + (t.status === 'skipped' ? 0 : t.duration_min), 0), [tasks]);
   if (loading || !child || !settings) return <Loader />;
-  const overloaded = load > settings.max_daily_minutes;
+  const over = load > settings.max_daily_minutes;
 
   return (
-    <main className="mx-auto max-w-lg px-4 pb-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-black tracking-tight">Agenda</h1>
-        <div className="flex gap-1.5">
-          <button onClick={() => setRoutines(true)} className="btn-soft !px-3 !py-2 text-xs"><Repeat size={14} /> Routines</button>
-          <button onClick={() => setCopyOpen(true)} className="btn-soft !px-3 !py-2 text-xs"><Copy size={14} /></button>
+    <main className="mx-auto max-w-lg px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
+      <div className="flex items-center justify-between gap-2">
+        <h1 className="text-3xl font-black text-ink">Agenda</h1>
+        <div className="flex gap-2">
+          <button onClick={() => setRoutines(true)} className="chip"><Repeat size={14} /> Routines</button>
+          <button onClick={() => setCopyOpen(true)} className="chip"><Copy size={14} /></button>
         </div>
       </div>
 
-      <div className="scroll-x mt-4 flex gap-2 pb-1">
+      <div className="mt-4 flex gap-2">
         {week.map((d) => {
           const active = d === day;
           return (
             <button key={d} onClick={() => setDay(d)}
-                    className={clsx('flex min-w-[52px] flex-col items-center rounded-2xl border px-2 py-2.5 transition',
-                      active ? 'border-brand bg-brand text-white' : 'border-line bg-raised text-muted',
-                      d === todayISO() && !active && 'border-brand/50 text-brand-soft')}>
-              <span className="text-[10px] font-bold uppercase">{dayShort(dowOf(d))}</span>
-              <span className="text-lg font-black leading-tight">{Number(d.slice(-2))}</span>
+                    className={clsx('flex flex-1 flex-col items-center rounded-3xl border-2 py-2.5 no-select transition',
+                      active ? 'border-grape bg-grape text-white' : d === todayISO() ? 'border-grape bg-card text-grape' : 'border-line bg-card text-muted')}>
+              <span className="text-[10px] font-black uppercase">{dayShort(dowOf(d))}</span>
+              <span className="text-xl font-black leading-tight">{Number(d.slice(-2))}</span>
             </button>
           );
         })}
       </div>
-      <div className="mt-2 flex justify-between">
-        <button onClick={() => setDay(addDaysISO(day, -7))} className="text-xs font-semibold text-muted">← semaine</button>
-        <button onClick={() => setDay(todayISO())} className="text-xs font-semibold text-brand-soft">aujourd’hui</button>
-        <button onClick={() => setDay(addDaysISO(day, 7))} className="text-xs font-semibold text-muted">semaine →</button>
+      <div className="mt-3 flex justify-between">
+        <button onClick={() => setDay(addDaysISO(day, -7))} className="chip">←</button>
+        <button onClick={() => setDay(todayISO())} className="chip !border-grape !text-grape">Aujourd’hui</button>
+        <button onClick={() => setDay(addDaysISO(day, 7))} className="chip">→</button>
       </div>
 
       <div className="mt-5 flex items-center justify-between">
-        <h2 className="font-bold capitalize">{longDate(day)}</h2>
-        <span className={clsx('chip', overloaded && '!border-coral/35 !bg-coral/10 !text-coral')}>
-          {overloaded && <AlertTriangle size={11} />}{humanDuration(load)}
+        <h2 className="text-lg font-black capitalize text-ink">{longDate(day)}</h2>
+        <span className={clsx('chip', over && '!border-flame !bg-flame-light !text-flame-dark')}>
+          ⏳ {humanDuration(load)}
         </span>
       </div>
-      {overloaded && (
-        <p className="mt-2 rounded-2xl border border-coral/25 bg-coral/[.08] px-3 py-2.5 text-xs leading-relaxed text-coral">
-          Au-delà de {humanDuration(settings.max_daily_minutes)}, une journée devient irréaliste — et une journée irréaliste
-          se solde souvent par zéro tâche faite plutôt que par quelques-unes.
-        </p>
-      )}
 
       {tasks.length === 0 ? (
-        <div className="mt-5"><Empty emoji="📝" title="Journée vide" hint="Ajoute une première tâche ci-dessous." /></div>
+        <div className="mt-5"><Empty emoji="📝" title="Journée vide" /></div>
       ) : (
-        <ul className="stagger mt-4 space-y-2.5">
+        <ul className="stagger mt-4 space-y-3">
           {tasks.map((t) => (
             <li key={t.id}>
-              <button onClick={() => setDraft(taskToDraft(t))} className="card w-full p-4 text-left active:scale-[.99]">
+              <button onClick={() => setDraft(toDraft(t))} className="card w-full p-4 text-left no-select active:scale-[.99]">
                 <div className="flex items-start gap-3">
-                  <span className="w-11 shrink-0 pt-0.5 font-mono text-xs font-bold text-white/70">
-                    {t.start_time ? hhmm(t.start_time) : 'libre'}
-                  </span>
+                  <span className="w-12 shrink-0 text-sm font-black tabular-nums text-ink">{t.start_time ? hhmm(t.start_time) : 'libre'}</span>
                   <div className="min-w-0 flex-1">
-                    <p className="font-bold leading-snug">{t.title}</p>
-                    <div className="mt-1.5 flex flex-wrap gap-x-2.5 gap-y-1 text-[11px] text-muted">
+                    <p className="font-extrabold text-ink">{t.title}</p>
+                    <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs font-bold text-muted">
                       {t.subject && <span>{t.subject.emoji} {t.subject.name}</span>}
                       <span>{humanDuration(t.duration_min)}</span>
-                      <span className="text-brand-soft">+{t.coins} {settings.currency_emoji}</span>
-                      {t.routine_id && <span className="text-sky">↻ routine</span>}
+                      <span className="text-grape">+{t.coins} {settings.currency_emoji}</span>
+                      {t.routine_id && <span>↻</span>}
                       {t.require_photo && <span>📷</span>}
                       {t.require_validation && <span>👁️</span>}
-                      {!!t.subtasks?.length && <span>{t.subtasks.length} étapes</span>}
                     </div>
                   </div>
-                  <span className={clsx('shrink-0 text-xs font-bold',
-                    t.status === 'done' ? 'text-mint' : t.status === 'doing' ? 'text-mint' :
-                    t.status === 'submitted' ? 'text-sun' : 'text-muted')}>
-                    {t.status === 'done' ? '✓' : t.status === 'doing' ? '●' : t.status === 'submitted' ? '⏳' : ''}
+                  <span className="shrink-0 text-xl">
+                    {t.status === 'done' ? '✅' : t.status === 'doing' ? '▶️' : t.status === 'submitted' ? '⏳' : ''}
                   </span>
                 </div>
               </button>
@@ -123,9 +108,7 @@ function Agenda() {
       )}
 
       <button onClick={() => setDraft({ ...emptyDraft(), subject_id: subjects[0]?.id ?? '' })}
-              className="btn-primary mt-5 w-full !py-4">
-        <Plus size={19} /> Ajouter une tâche
-      </button>
+              className="btn-grape btn-lg mt-5 w-full"><Plus size={20} /> Ajouter</button>
 
       {draft && <TaskSheet draft={draft} day={day} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); reload(); }} />}
       <RoutinesSheet open={routines} onClose={() => setRoutines(false)} onGenerated={reload} />
@@ -134,7 +117,7 @@ function Agenda() {
   );
 }
 
-function taskToDraft(t: Task): Draft {
+function toDraft(t: Task): Draft {
   return {
     id: t.id, title: t.title, description: t.description ?? '', subject_id: t.subject_id ?? '',
     start_time: t.start_time ? hhmm(t.start_time) : '09:00', duration_min: t.duration_min,
@@ -145,7 +128,6 @@ function taskToDraft(t: Task): Draft {
   };
 }
 
-/* ------------------------------------------------------ formulaire tâche */
 function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string; onClose: () => void; onSaved: () => void }) {
   const { child, settings, subjects, profile } = useApp();
   const [d, setD] = useState<Draft>(draft);
@@ -159,7 +141,7 @@ function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string
   const coins = d.coinsAuto ? auto : d.coins;
 
   const save = async () => {
-    if (!d.title.trim()) { toast('Il faut un titre', 'err'); return; }
+    if (!d.title.trim()) { toast('Titre manquant', 'err'); return; }
     setBusy(true);
     try {
       const payload = {
@@ -180,25 +162,18 @@ function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string
         const { data, error } = await supabase.from('tasks').insert(payload).select('id').single();
         if (error) throw error;
         taskId = data.id;
+        notify('task_created', { title: d.title.trim(), day, time: d.is_flexible ? null : d.start_time });
       }
       const subs = d.subtasks.map((l) => l.trim()).filter(Boolean);
-      if (subs.length) {
-        await supabase.from('subtasks').insert(subs.map((label, i) => ({ task_id: taskId, label, position: i })));
-      }
-      toast(d.id ? 'Tâche modifiée' : 'Tâche ajoutée ✅');
+      if (subs.length) await supabase.from('subtasks').insert(subs.map((label, i) => ({ task_id: taskId, label, position: i })));
+      toast(d.id ? 'Modifiée' : 'Ajoutée');
       onSaved();
     } catch (e: any) { toast(e.message, 'err'); }
     finally { setBusy(false); }
   };
 
-  const remove = async () => {
-    if (!d.id) return;
-    await supabase.from('tasks').delete().eq('id', d.id);
-    toast('Supprimée'); onSaved();
-  };
-
   const aiSplit = async () => {
-    if (!d.title.trim()) { toast('Écris d’abord le titre', 'err'); return; }
+    if (!d.title.trim()) return;
     setAiBusy(true);
     try {
       const { data: s } = await supabase.auth.getSession();
@@ -210,55 +185,48 @@ function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string
       const json = await r.json();
       if (!r.ok) throw new Error(json.error);
       set('subtasks', json.steps);
-      toast('Étapes générées ✨');
     } catch (e: any) { toast(e.message, 'err'); }
     finally { setAiBusy(false); }
   };
 
-  const tri = (v: boolean | null, fallback: boolean, onChange: (v: boolean | null) => void) => (
-    <div className="flex gap-1.5">
-      {([['Défaut', null], ['Oui', true], ['Non', false]] as [string, boolean | null][]).map(([lbl, val]) => (
-        <button key={lbl} onClick={() => onChange(val)}
-                className={clsx('flex-1 rounded-xl border px-2 py-2 text-xs font-semibold transition',
-                  v === val ? 'border-brand bg-brand/20 text-white' : 'border-line bg-raised text-muted')}>
-          {lbl}{val === null && <span className="ml-1 opacity-60">({fallback ? 'oui' : 'non'})</span>}
+  const Tri = ({ v, fb, on }: { v: boolean | null; fb: boolean; on: (x: boolean | null) => void }) => (
+    <div className="flex gap-2">
+      {([['Auto', null], ['Oui', true], ['Non', false]] as [string, boolean | null][]).map(([lbl, val]) => (
+        <button key={lbl} onClick={() => on(val)}
+                className={clsx('flex-1 rounded-2xl border-2 py-2.5 text-sm font-extrabold transition',
+                  v === val ? 'border-grape bg-grape-light text-grape' : 'border-line bg-card text-muted')}>
+          {lbl}
         </button>
       ))}
     </div>
   );
 
   return (
-    <Sheet open onClose={onClose} title={d.id ? 'Modifier la tâche' : 'Nouvelle tâche'}
+    <Sheet open onClose={onClose} title={d.id ? 'Modifier' : 'Nouvelle tâche'}
            footer={
-             <div className="flex gap-2">
-               {d.id && <button onClick={remove} className="btn-danger !px-4"><Trash2 size={16} /></button>}
-               <button onClick={save} disabled={busy} className="btn-primary flex-1 !py-3.5">
-                 {busy ? 'Enregistrement…' : d.id ? 'Enregistrer' : 'Ajouter'}
+             <div className="flex gap-2.5">
+               {d.id && (
+                 <button onClick={async () => { await supabase.from('tasks').delete().eq('id', d.id!); toast('Supprimée'); onSaved(); }}
+                         className="btn-flame !px-5"><Trash2 size={18} /></button>
+               )}
+               <button onClick={save} disabled={busy} className="btn-grape btn-lg flex-1">
+                 {busy ? '…' : d.id ? 'Enregistrer' : 'Ajouter'}
                </button>
              </div>
            }>
-      <SegmentedTabs value={tab} onChange={setTab}
-                     options={[{ value: 'base', label: 'Contenu' }, { value: 'rules', label: 'Règles' }]} />
+      <SegmentedTabs value={tab} onChange={setTab} options={[{ value: 'base', label: 'Contenu' }, { value: 'rules', label: 'Règles' }]} />
 
       {tab === 'base' ? (
         <div className="mt-5 space-y-4">
-          <div>
-            <label className="label">Titre</label>
-            <input className="field" value={d.title} onChange={(e) => set('title', e.target.value)}
-                   placeholder="Ex : Maths — exercices sur Thalès" />
-          </div>
+          <input className="field" value={d.title} onChange={(e) => set('title', e.target.value)} placeholder="Titre" />
 
-          <div>
-            <label className="label">Matière</label>
-            <div className="scroll-x flex gap-2 pb-1">
-              {subjects.map((s) => (
-                <button key={s.id} onClick={() => set('subject_id', s.id)}
-                        className={clsx('chip shrink-0 !px-3 !py-2 transition',
-                          d.subject_id === s.id && '!border-brand !bg-brand/20 !text-white')}>
-                  {s.emoji} {s.name}
-                </button>
-              ))}
-            </div>
+          <div className="scroll-x flex gap-2 pb-1">
+            {subjects.map((s) => (
+              <button key={s.id} onClick={() => set('subject_id', s.id)}
+                      className={clsx('chip shrink-0', d.subject_id === s.id && '!border-grape !bg-grape-light !text-grape')}>
+                {s.emoji} {s.name}
+              </button>
+            ))}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -268,131 +236,94 @@ function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string
                      onChange={(e) => set('start_time', e.target.value)} />
             </div>
             <div>
-              <label className="label">Durée (min)</label>
+              <label className="label">Durée</label>
               <input type="number" min={5} step={5} className="field" value={d.duration_min}
                      onChange={(e) => set('duration_min', Math.max(5, Number(e.target.value) || 5))} />
             </div>
           </div>
 
-          <label className="flex items-center gap-3 rounded-2xl border border-line bg-raised px-4 py-3">
-            <input type="checkbox" checked={d.is_flexible} onChange={(e) => set('is_flexible', e.target.checked)}
-                   className="h-5 w-5 accent-[#7C5CFF]" />
-            <div>
-              <p className="text-sm font-semibold">Créneau libre</p>
-              <p className="text-[11px] leading-snug text-muted">Elle choisit quand la faire dans la journée — plus d’autonomie, meilleure adhésion.</p>
-            </div>
-          </label>
+          <button onClick={() => set('is_flexible', !d.is_flexible)}
+                  className={clsx('flex w-full items-center gap-3 rounded-3xl border-2 px-4 py-3.5 text-left no-select',
+                    d.is_flexible ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
+            <span className="text-2xl">{d.is_flexible ? '🔓' : '🔒'}</span>
+            <span className="font-extrabold text-ink">Créneau libre</span>
+          </button>
 
           <div>
             <label className="label">Difficulté</label>
-            <div className="flex gap-1.5">
-              {[1, 2, 3, 4].map((n) => (
-                <button key={n} onClick={() => set('difficulty', n)}
-                        className={clsx('flex-1 rounded-xl border py-2.5 text-sm font-bold transition',
-                          d.difficulty === n ? 'border-brand bg-brand/20 text-white' : 'border-line bg-raised text-muted')}>
-                  {['Facile', 'Normal', 'Dur', 'Costaud'][n - 1]}
+            <div className="flex gap-2">
+              {['🙂', '😐', '😤', '🔥'].map((e, i) => (
+                <button key={i} onClick={() => set('difficulty', i + 1)}
+                        className={clsx('flex-1 rounded-2xl border-2 py-3 text-2xl transition',
+                          d.difficulty === i + 1 ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
+                  {e}
                 </button>
               ))}
             </div>
           </div>
 
           <div>
-            <label className="label">Valeur · {settings.currency_name}</label>
-            <div className="flex items-center gap-2">
+            <label className="label">Valeur</label>
+            <div className="flex gap-2">
               <input type="number" className="field flex-1" value={coins} disabled={d.coinsAuto}
                      onChange={(e) => set('coins', Number(e.target.value) || 0)} />
               <button onClick={() => setD((x) => ({ ...x, coinsAuto: !x.coinsAuto, coins: auto }))}
-                      className={clsx('btn-soft shrink-0 !px-3 text-xs', d.coinsAuto && '!border-brand/40 !text-brand-soft')}>
+                      className={clsx('chip !px-4', d.coinsAuto && '!border-grape !bg-grape-light !text-grape')}>
                 {d.coinsAuto ? 'Auto' : 'Manuel'}
               </button>
             </div>
-            <p className="mt-1.5 text-[11px] text-muted">
-              Barème : {settings.base_coins} + {settings.coins_per_10min}/10 min × difficulté → <b>{auto}</b>
-            </p>
           </div>
 
           <div>
             <div className="mb-2 flex items-center justify-between">
-              <label className="label !mb-0">Micro-étapes</label>
-              <button onClick={aiSplit} disabled={aiBusy} className="chip !border-brand/35 !bg-brand/12 !text-brand-soft">
-                <Sparkles size={12} /> {aiBusy ? 'Génération…' : 'Découper avec l’IA'}
+              <label className="label !mb-0">Étapes</label>
+              <button onClick={aiSplit} disabled={aiBusy} className="chip !border-grape !bg-grape-light !text-grape">
+                <Sparkles size={13} /> {aiBusy ? '…' : 'IA'}
               </button>
             </div>
-            <p className="mb-2.5 text-[11px] leading-relaxed text-muted">
-              Le levier le plus efficace contre la procrastination : la première étape doit être ridiculement facile.
-            </p>
             <div className="space-y-2">
               {d.subtasks.map((s, i) => (
                 <div key={i} className="flex items-center gap-2">
-                  <GripVertical size={15} className="shrink-0 text-muted" />
-                  <input className="field !py-2.5 text-sm" value={s}
+                  <input className="field !py-2.5" value={s}
                          onChange={(e) => set('subtasks', d.subtasks.map((x, k) => (k === i ? e.target.value : x)))} />
                   <button onClick={() => set('subtasks', d.subtasks.filter((_, k) => k !== i))}
-                          className="btn-soft h-9 w-9 shrink-0 !rounded-full !p-0"><X size={14} /></button>
+                          className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-soft"><X size={16} /></button>
                 </div>
               ))}
-              <button onClick={() => set('subtasks', [...d.subtasks, ''])} className="btn-soft w-full text-xs">
-                <Plus size={14} /> Ajouter une étape
+              <button onClick={() => set('subtasks', [...d.subtasks, ''])} className="btn-plain w-full text-sm">
+                <Plus size={16} /> Étape
               </button>
             </div>
           </div>
 
-          <div>
-            <label className="label">Lien à ouvrir (facultatif)</label>
-            <input className="field" value={d.link_url} onChange={(e) => set('link_url', e.target.value)}
-                   placeholder="https://… (Pronote, un PDF, une vidéo)" inputMode="url" autoCapitalize="none" />
-          </div>
-
-          <div>
-            <label className="label">Mot pour Jeanne</label>
-            <textarea className="field min-h-[70px]" value={d.parent_note} onChange={(e) => set('parent_note', e.target.value)}
-                      placeholder="Un message perso qui s’affiche avec la tâche. Ça marche bien mieux qu’un texte générique." />
-          </div>
+          <input className="field" value={d.link_url} onChange={(e) => set('link_url', e.target.value)}
+                 placeholder="Lien (facultatif)" inputMode="url" autoCapitalize="none" />
+          <textarea className="field min-h-[80px]" value={d.parent_note} onChange={(e) => set('parent_note', e.target.value)}
+                    placeholder="Mot pour Jeanne" />
         </div>
       ) : (
         <div className="mt-5 space-y-5">
-          <p className="rounded-2xl border border-line bg-raised px-3.5 py-3 text-xs leading-relaxed text-muted">
-            Chaque règle peut suivre le <b>réglage général</b> (onglet Règles) ou être forcée pour cette tâche précise.
-          </p>
+          <div><label className="label">📷 Photo obligatoire</label><Tri v={d.require_photo} fb={settings.default_require_photo} on={(v) => set('require_photo', v)} /></div>
+          <div><label className="label">👁️ Validation parent</label><Tri v={d.require_validation} fb={settings.default_require_validation} on={(v) => set('require_validation', v)} /></div>
           <div>
-            <label className="label">📷 Photo de preuve obligatoire</label>
-            {tri(d.require_photo, settings.default_require_photo, (v) => set('require_photo', v))}
-          </div>
-          <div>
-            <label className="label">👁️ Ta validation avant les points</label>
-            {tri(d.require_validation, settings.default_require_validation, (v) => set('require_validation', v))}
-          </div>
-          <div>
-            <label className="label">
-              ⏱️ Temps minimum avant de pouvoir valider · {d.min_timer_pct ?? settings.default_min_timer_pct} %
-            </label>
-            <input type="range" min={0} max={100} step={10} className="w-full accent-[#7C5CFF]"
+            <label className="label">⏱️ Minuteur · {d.min_timer_pct ?? settings.default_min_timer_pct}%</label>
+            <input type="range" min={0} max={100} step={10} className="w-full accent-grape"
                    value={d.min_timer_pct ?? settings.default_min_timer_pct}
                    onChange={(e) => set('min_timer_pct', Number(e.target.value))} />
-            <div className="mt-1 flex justify-between text-[11px] text-muted">
-              <span>soit {Math.round((d.duration_min * (d.min_timer_pct ?? settings.default_min_timer_pct)) / 100)} min bloquées</span>
-              {d.min_timer_pct !== null && (
-                <button onClick={() => set('min_timer_pct', null)} className="font-semibold text-brand-soft">réglage général</button>
-              )}
-            </div>
           </div>
-          <label className="flex items-center gap-3 rounded-2xl border border-line bg-raised px-4 py-3">
-            <input type="checkbox" checked={d.allow_postpone} onChange={(e) => set('allow_postpone', e.target.checked)}
-                   className="h-5 w-5 accent-[#7C5CFF]" />
-            <div>
-              <p className="text-sm font-semibold">Report autorisé</p>
-              <p className="text-[11px] text-muted">Décoche pour une tâche non négociable.</p>
-            </div>
-          </label>
+          <button onClick={() => set('allow_postpone', !d.allow_postpone)}
+                  className={clsx('flex w-full items-center gap-3 rounded-3xl border-2 px-4 py-3.5 no-select',
+                    d.allow_postpone ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
+            <span className="text-2xl">⏭️</span><span className="font-extrabold text-ink">Report autorisé</span>
+          </button>
         </div>
       )}
     </Sheet>
   );
 }
 
-/* ------------------------------------------------------------- routines */
 function RoutinesSheet({ open, onClose, onGenerated }: { open: boolean; onClose: () => void; onGenerated: () => void }) {
-  const { subjects, settings, child } = useApp();
+  const { subjects } = useApp();
   const [list, setList] = useState<Routine[]>([]);
   const [form, setForm] = useState<Partial<Routine> | null>(null);
   const [busy, setBusy] = useState(false);
@@ -404,19 +335,17 @@ function RoutinesSheet({ open, onClose, onGenerated }: { open: boolean; onClose:
   useEffect(() => { if (open) load(); }, [open]);
 
   const save = async () => {
-    if (!form?.title || !form.start_time) { toast('Titre et heure obligatoires', 'err'); return; }
+    if (!form?.title || !form.start_time) { toast('Titre et heure', 'err'); return; }
     setBusy(true);
     const payload = {
       title: form.title, subject_id: form.subject_id || null,
       days_of_week: form.days_of_week ?? [1, 2, 3, 4, 5],
       start_time: form.start_time, duration_min: form.duration_min ?? 45,
-      difficulty: form.difficulty ?? 2, coins: form.coins ?? null,
-      subtasks: form.subtasks ?? [], active: true,
+      difficulty: form.difficulty ?? 2, active: true,
     };
     if (form.id) await supabase.from('routines').update(payload).eq('id', form.id);
     else await supabase.from('routines').insert(payload);
-    setForm(null); await load(); setBusy(false);
-    toast('Routine enregistrée');
+    setForm(null); await load(); setBusy(false); toast('Enregistrée');
   };
 
   const generate = async () => {
@@ -430,65 +359,49 @@ function RoutinesSheet({ open, onClose, onGenerated }: { open: boolean; onClose:
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error);
-      toast(`${j.created} tâche${j.created > 1 ? 's' : ''} générée${j.created > 1 ? 's' : ''} sur 14 jours`);
+      toast(`${j.created} tâches créées`);
       onGenerated();
     } catch (e: any) { toast(e.message, 'err'); }
     finally { setBusy(false); }
   };
 
   return (
-    <Sheet open={open} onClose={onClose} title="Routines récurrentes"
-           footer={
-             <button onClick={generate} disabled={busy} className="btn-primary w-full">
-               <Repeat size={16} /> Générer les 14 prochains jours
-             </button>
-           }>
-      <p className="mb-4 text-sm leading-relaxed text-muted">
-        Sa journée type. Tu la construis une fois, elle se recrée automatiquement — c’est le cadre qui manque au CNED.
-      </p>
-
+    <Sheet open={open} onClose={onClose} title="Routines"
+           footer={<button onClick={generate} disabled={busy} className="btn-grape btn-lg w-full"><Repeat size={18} /> Générer 14 jours</button>}>
       {form ? (
         <div className="space-y-4">
-          <input className="field" placeholder="Titre" value={form.title ?? ''}
-                 onChange={(e) => setForm({ ...form, title: e.target.value })} />
+          <input className="field" placeholder="Titre" value={form.title ?? ''} onChange={(e) => setForm({ ...form, title: e.target.value })} />
           <div className="scroll-x flex gap-2 pb-1">
             {subjects.map((s) => (
               <button key={s.id} onClick={() => setForm({ ...form, subject_id: s.id })}
-                      className={clsx('chip shrink-0', form.subject_id === s.id && '!border-brand !bg-brand/20 !text-white')}>
+                      className={clsx('chip shrink-0', form.subject_id === s.id && '!border-grape !bg-grape-light !text-grape')}>
                 {s.emoji} {s.name}
               </button>
             ))}
           </div>
-          <div>
-            <label className="label">Jours</label>
-            <div className="flex gap-1.5">
-              {[1, 2, 3, 4, 5, 6, 0].map((n) => {
-                const on = (form.days_of_week ?? [1, 2, 3, 4, 5]).includes(n);
-                return (
-                  <button key={n}
-                          onClick={() => {
-                            const cur = form.days_of_week ?? [1, 2, 3, 4, 5];
-                            setForm({ ...form, days_of_week: on ? cur.filter((x) => x !== n) : [...cur, n] });
-                          }}
-                          className={clsx('flex-1 rounded-xl border py-2.5 text-[11px] font-bold uppercase transition',
-                            on ? 'border-brand bg-brand/20 text-white' : 'border-line bg-raised text-muted')}>
-                    {dayShort(n)}
-                  </button>
-                );
-              })}
-            </div>
+          <div className="flex gap-1.5">
+            {[1, 2, 3, 4, 5, 6, 0].map((n) => {
+              const on = (form.days_of_week ?? [1, 2, 3, 4, 5]).includes(n);
+              return (
+                <button key={n}
+                        onClick={() => {
+                          const cur = form.days_of_week ?? [1, 2, 3, 4, 5];
+                          setForm({ ...form, days_of_week: on ? cur.filter((x) => x !== n) : [...cur, n] });
+                        }}
+                        className={clsx('flex-1 rounded-2xl border-2 py-2.5 text-[11px] font-black uppercase',
+                          on ? 'border-grape bg-grape-light text-grape' : 'border-line bg-card text-muted')}>
+                  {dayShort(n)}
+                </button>
+              );
+            })}
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Heure</label>
-              <input type="time" className="field" value={form.start_time ?? '09:00'}
-                     onChange={(e) => setForm({ ...form, start_time: e.target.value })} /></div>
-            <div><label className="label">Durée (min)</label>
-              <input type="number" className="field" value={form.duration_min ?? 45}
-                     onChange={(e) => setForm({ ...form, duration_min: Number(e.target.value) })} /></div>
+            <input type="time" className="field" value={form.start_time ?? '09:00'} onChange={(e) => setForm({ ...form, start_time: e.target.value })} />
+            <input type="number" className="field" value={form.duration_min ?? 45} onChange={(e) => setForm({ ...form, duration_min: Number(e.target.value) })} />
           </div>
-          <div className="flex gap-2">
-            <button onClick={() => setForm(null)} className="btn-soft flex-1">Annuler</button>
-            <button onClick={save} disabled={busy} className="btn-primary flex-1">Enregistrer</button>
+          <div className="flex gap-2.5">
+            <button onClick={() => setForm(null)} className="btn-plain flex-1">Annuler</button>
+            <button onClick={save} disabled={busy} className="btn-grape flex-1">Enregistrer</button>
           </div>
         </div>
       ) : (
@@ -497,26 +410,25 @@ function RoutinesSheet({ open, onClose, onGenerated }: { open: boolean; onClose:
             {list.map((r) => (
               <li key={r.id} className="card flex items-center gap-3 p-3.5">
                 <button onClick={() => setForm(r)} className="min-w-0 flex-1 text-left">
-                  <p className="truncate font-semibold">{r.title}</p>
-                  <p className="text-[11px] text-muted">
+                  <p className="truncate font-extrabold text-ink">{r.title}</p>
+                  <p className="text-xs font-bold text-muted">
                     {hhmm(r.start_time)} · {r.duration_min} min · {r.days_of_week.map((d) => dayShort(d)).join(' ')}
                   </p>
                 </button>
                 <button onClick={async () => { await supabase.from('routines').delete().eq('id', r.id); load(); }}
-                        className="btn-soft h-9 w-9 shrink-0 !rounded-full !p-0"><Trash2 size={14} /></button>
+                        className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-flame-light"><Trash2 size={16} /></button>
               </li>
             ))}
           </ul>
-          {list.length === 0 && <Empty emoji="↻" title="Aucune routine" hint="Crée sa journée type une bonne fois." />}
+          {list.length === 0 && <Empty emoji="↻" title="Aucune routine" />}
           <button onClick={() => setForm({ days_of_week: [1, 2, 3, 4, 5], start_time: '09:00', duration_min: 45, difficulty: 2 })}
-                  className="btn-ghost mt-4 w-full"><Plus size={16} /> Nouvelle routine</button>
+                  className="btn-plain mt-4 w-full"><Plus size={18} /> Nouvelle</button>
         </>
       )}
     </Sheet>
   );
 }
 
-/* ------------------------------------------------------------ duplication */
 function CopySheet({ open, onClose, day, tasks, onDone }: {
   open: boolean; onClose: () => void; day: string; tasks: Task[]; onDone: () => void;
 }) {
@@ -525,7 +437,7 @@ function CopySheet({ open, onClose, day, tasks, onDone }: {
   const [busy, setBusy] = useState(false);
 
   const copy = async () => {
-    if (!tasks.length) { toast('Rien à copier', 'err'); return; }
+    if (!tasks.length) return;
     setBusy(true);
     for (const t of tasks) {
       const { data } = await supabase.from('tasks').insert({
@@ -540,21 +452,16 @@ function CopySheet({ open, onClose, day, tasks, onDone }: {
         await supabase.from('subtasks').insert(t.subtasks.map((s, i) => ({ task_id: data.id, label: s.label, position: i })));
       }
     }
-    setBusy(false); onClose(); onDone();
-    toast(`${tasks.length} tâches copiées`);
+    setBusy(false); onClose(); onDone(); toast(`${tasks.length} copiées`);
   };
 
   return (
-    <Sheet open={open} onClose={onClose} title="Dupliquer la journée"
-           footer={<button onClick={copy} disabled={busy} className="btn-primary w-full">Copier les {tasks.length} tâches</button>}>
-      <p className="mb-4 text-sm text-muted">Copie toutes les tâches de {longDate(day)} vers un autre jour.</p>
-      <label className="label">Vers le</label>
+    <Sheet open={open} onClose={onClose} title="Dupliquer"
+           footer={<button onClick={copy} disabled={busy} className="btn-grape btn-lg w-full">Copier {tasks.length} tâches</button>}>
       <input type="date" className="field" value={target} onChange={(e) => setTarget(e.target.value)} />
       <div className="mt-3 flex gap-2">
         {[1, 2, 7].map((n) => (
-          <button key={n} onClick={() => setTarget(addDaysISO(day, n))} className="chip">
-            +{n} {n === 7 ? 'semaine' : 'jour' + (n > 1 ? 's' : '')}
-          </button>
+          <button key={n} onClick={() => setTarget(addDaysISO(day, n))} className="chip">+{n} j</button>
         ))}
       </div>
     </Sheet>

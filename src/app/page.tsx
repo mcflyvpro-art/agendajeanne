@@ -15,5 +15,5 @@ export default function Home() {
     else router.replace('/now');
   }, [session, profile, loading, router]);
 
-  return <Loader label="Ouverture…" />;
+  return <Loader />;
 }

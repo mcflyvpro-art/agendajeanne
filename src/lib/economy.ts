@@ -20,15 +20,31 @@ export function computeAward(s: Settings, task: Task, opts: { onTime: boolean; s
     bonuses.push({ label: `Série ${opts.streak} j`, pct: s.streak_bonus_pct });
     pct += s.streak_bonus_pct;
   }
-  const coins = Math.round(task.coins * (1 + pct / 100));
-  return { coins, xp: Math.round(task.coins * 0.8), bonuses };
+  const mult = s.difficulty_mult?.[String(task.difficulty)] ?? 1;
+  return {
+    coins: Math.round(task.coins * (1 + pct / 100)),
+    xp: Math.max(1, Math.round((s.xp_per_task ?? 20) * mult)),
+    bonuses,
+  };
 }
 
-export function levelOf(xp: number, perLevel: number) {
+export interface LevelInfo { level: number; into: number; per: number; pct: number; toNext: number; title: string; }
+
+const TITLES = [
+  'Débutante', 'Motivée', 'Régulière', 'Appliquée', 'Sérieuse',
+  'Endurante', 'Redoutable', 'Experte', 'Championne', 'Légende',
+];
+
+export function levelOf(xp: number, perLevel: number): LevelInfo {
   const per = Math.max(1, perLevel);
   const level = Math.floor(xp / per) + 1;
   const into = xp % per;
-  return { level, into, per, pct: Math.round((into / per) * 100), toNext: per - into };
+  return {
+    level, into, per,
+    pct: Math.round((into / per) * 100),
+    toNext: per - into,
+    title: TITLES[Math.min(TITLES.length - 1, Math.floor((level - 1) / 3))],
+  };
 }
 
 /** Durée minimale de travail avant de pouvoir valider (en secondes). */
@@ -52,15 +68,16 @@ export function progressOf(tasks: Task[]) {
   return { total, done, pct: total ? Math.round((done / total) * 100) : 0 };
 }
 
-export function coinsLabel(s: Settings | null, n: number): string {
-  return `${n} ${s?.currency_emoji ?? '🪙'}`;
+/** XP gagnés aujourd'hui, pour la jauge d'objectif quotidien. */
+export function xpToday(tasks: Task[]): number {
+  return tasks.reduce((n, t) => n + (t.xp_awarded ?? 0), 0);
 }
 
 /** Badges à débloquer, d'après les compteurs courants. */
 export function badgesToUnlock(
   all: { code: string; rule_kind: string; rule_value: number }[],
   owned: Set<string>,
-  stats: { streak: number; tasksTotal: number; perfectDays: number; bestQuiz: number; earlyStarts: number; contractsDone: number }
+  stats: { streak: number; tasksTotal: number; perfectDays: number; bestQuiz: number; earlyStarts: number; contractsDone: number; level: number }
 ): string[] {
   const value: Record<string, number> = {
     streak: stats.streak,
@@ -69,10 +86,7 @@ export function badgesToUnlock(
     quiz_score: stats.bestQuiz,
     early_bird: stats.earlyStarts,
     contracts: stats.contractsDone,
+    level: stats.level,
   };
   return all.filter((b) => !owned.has(b.code) && (value[b.rule_kind] ?? 0) >= b.rule_value).map((b) => b.code);
-}
-
-export function profileAfterAward(p: Profile, coins: number, xp: number): Partial<Profile> {
-  return { coins: p.coins + coins, xp: p.xp + xp };
 }

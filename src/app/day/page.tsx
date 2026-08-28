@@ -1,65 +1,61 @@
 'use client';
 import { useState } from 'react';
 import clsx from 'clsx';
-import { ChevronLeft, ChevronRight, Check, Clock, Hourglass } from 'lucide-react';
 import ChildShell from '@/components/ChildShell';
 import { useApp } from '@/components/AppProvider';
 import { useDay } from '@/lib/useDay';
-import { todayISO, addDaysISO, relativeDay, hhmm, humanDuration } from '@/lib/dates';
+import { todayISO, addDaysISO, relativeDay, hhmm, humanDuration, dayShort, dowOf, weekStart } from '@/lib/dates';
 import { progressOf } from '@/lib/economy';
 import { Loader, Bar, Empty } from '@/components/ui';
 import type { Task } from '@/lib/types';
 
 export default function DayPage() { return <ChildShell><Day /></ChildShell>; }
 
-const STATUS: Record<string, { label: string; cls: string }> = {
-  todo:      { label: 'À faire',      cls: 'text-muted' },
-  doing:     { label: 'En cours',     cls: 'text-mint' },
-  submitted: { label: 'En attente',   cls: 'text-sun' },
-  done:      { label: 'Fait',         cls: 'text-mint' },
-  skipped:   { label: 'Annulée',      cls: 'text-muted' },
-  missed:    { label: 'Manquée',      cls: 'text-coral' },
-};
-
 function Day() {
   const { profile, settings } = useApp();
   const [day, setDay] = useState(todayISO());
   const { tasks, loading } = useDay(profile?.id, day);
   const prog = progressOf(tasks);
+  const week = Array.from({ length: 7 }, (_, i) => addDaysISO(weekStart(day), i));
 
   return (
-    <main className="mx-auto max-w-lg px-4 pb-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
-      <div className="flex items-center justify-between gap-2">
-        <button onClick={() => setDay(addDaysISO(day, -1))} className="btn-soft h-11 w-11 !rounded-full !p-0">
-          <ChevronLeft size={19} />
-        </button>
-        <div className="text-center">
-          <h1 className="text-xl font-black capitalize tracking-tight">{relativeDay(day)}</h1>
-          {day !== todayISO() && (
-            <button onClick={() => setDay(todayISO())} className="text-[11px] font-semibold text-brand-soft">
-              revenir à aujourd’hui
+    <main className="mx-auto max-w-lg px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
+      <h1 className="text-3xl font-black capitalize text-ink">{relativeDay(day)}</h1>
+
+      <div className="mt-4 flex gap-2">
+        {week.map((d) => {
+          const active = d === day;
+          const isToday = d === todayISO();
+          return (
+            <button key={d} onClick={() => setDay(d)}
+                    className={clsx('flex flex-1 flex-col items-center rounded-3xl border-2 py-2.5 no-select transition',
+                      active ? 'border-grape bg-grape text-white' : isToday ? 'border-grape bg-card text-grape' : 'border-line bg-card text-muted')}>
+              <span className="text-[10px] font-black uppercase">{dayShort(dowOf(d))}</span>
+              <span className="text-xl font-black leading-tight">{Number(d.slice(-2))}</span>
             </button>
-          )}
-        </div>
-        <button onClick={() => setDay(addDaysISO(day, 1))} className="btn-soft h-11 w-11 !rounded-full !p-0">
-          <ChevronRight size={19} />
-        </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-3 flex justify-between">
+        <button onClick={() => setDay(addDaysISO(day, -7))} className="chip">←</button>
+        <button onClick={() => setDay(todayISO())} className="chip !border-grape !text-grape">Aujourd’hui</button>
+        <button onClick={() => setDay(addDaysISO(day, 7))} className="chip">→</button>
       </div>
 
       {!!prog.total && (
-        <div className="mt-4">
-          <div className="mb-1.5 flex justify-between text-[11px] font-semibold text-muted">
-            <span>{prog.done} sur {prog.total}</span>
-            <span>{prog.pct} %</span>
+        <div className="mt-5">
+          <div className="mb-2 flex justify-between text-sm font-extrabold text-ink">
+            <span>✅ {prog.done} / {prog.total}</span><span>{prog.pct}%</span>
           </div>
-          <Bar pct={prog.pct} color={prog.pct === 100 ? '#2FD8A5' : '#7C5CFF'} />
+          <Bar pct={prog.pct} color={prog.pct === 100 ? '#1FC08A' : '#7C4DEE'} />
         </div>
       )}
 
       {loading ? <Loader /> : tasks.length === 0 ? (
-        <div className="mt-8"><Empty emoji="🍃" title="Journée libre" hint="Aucune tâche prévue ce jour-là." /></div>
+        <div className="mt-6"><Empty emoji="🍃" title="Journée libre" /></div>
       ) : (
-        <ul className="stagger mt-5 space-y-2.5">
+        <ul className="stagger mt-5 space-y-3">
           {tasks.map((t) => <li key={t.id}><Row task={t} currency={settings?.currency_emoji ?? '🪙'} /></li>)}
         </ul>
       )}
@@ -68,38 +64,26 @@ function Day() {
 }
 
 function Row({ task, currency }: { task: Task; currency: string }) {
-  const st = STATUS[task.status] ?? STATUS.todo;
-  const finished = task.status === 'done' || task.status === 'submitted';
+  const done = task.status === 'done';
+  const submitted = task.status === 'submitted';
+  const doing = task.status === 'doing';
   return (
-    <div className={clsx('card flex gap-3 p-3.5 transition', finished && 'opacity-60')}>
-      <div className="flex w-12 shrink-0 flex-col items-center pt-0.5">
-        <span className="font-mono text-xs font-bold text-white/80">{task.start_time ? hhmm(task.start_time) : '~'}</span>
-        <span className="mt-1 h-1.5 w-1.5 rounded-full" style={{ background: task.subject?.color ?? '#7C5CFF' }} />
+    <div className={clsx('card flex items-center gap-3 p-4', done && 'opacity-60')}>
+      <div className="w-14 shrink-0 text-center">
+        <div className="text-sm font-black tabular-nums text-ink">{task.start_time ? hhmm(task.start_time) : '—'}</div>
+        <div className="mx-auto mt-1.5 h-2 w-2 rounded-full" style={{ background: task.subject?.color ?? '#7C4DEE' }} />
       </div>
       <div className="min-w-0 flex-1">
-        <p className={clsx('font-bold leading-snug', finished && 'line-through')}>{task.title}</p>
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted">
-          {task.subject && <span>{task.subject.emoji} {task.subject.name}</span>}
-          <span className="inline-flex items-center gap-1"><Clock size={11} />{humanDuration(task.duration_min)}</span>
-          <span className={clsx('font-semibold', st.cls)}>{st.label}</span>
-        </div>
-        {!!task.subtasks?.length && (
-          <p className="mt-1 text-[11px] text-muted">
-            {task.subtasks.filter((s) => s.done).length}/{task.subtasks.length} étapes
-          </p>
-        )}
+        <p className={clsx('font-extrabold text-ink', done && 'line-through')}>{task.title}</p>
+        <p className="mt-0.5 text-xs font-bold text-muted">
+          {task.subject ? `${task.subject.emoji} ` : ''}{humanDuration(task.duration_min)}
+        </p>
       </div>
-      <div className="flex shrink-0 flex-col items-end justify-center">
-        {task.status === 'done' ? (
-          <>
-            <span className="grid h-7 w-7 place-items-center rounded-full bg-mint/15 text-mint"><Check size={15} strokeWidth={3} /></span>
-            <span className="mt-1 text-[10px] font-bold text-mint">+{task.coins_awarded ?? task.coins}</span>
-          </>
-        ) : task.status === 'submitted' ? (
-          <span className="grid h-7 w-7 place-items-center rounded-full bg-sun/15 text-sun"><Hourglass size={14} /></span>
-        ) : (
-          <span className="text-[11px] font-bold text-brand-soft">+{task.coins} {currency}</span>
-        )}
+      <div className="shrink-0 text-center">
+        {done ? <span className="text-2xl">✅</span>
+          : submitted ? <span className="text-2xl">⏳</span>
+          : doing ? <span className="text-2xl">▶️</span>
+          : <span className="text-sm font-black text-grape">+{task.coins} {currency}</span>}
       </div>
     </div>
   );
