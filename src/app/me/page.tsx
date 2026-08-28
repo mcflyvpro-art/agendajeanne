@@ -1,37 +1,40 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import clsx from 'clsx';
 import ChildShell from '@/components/ChildShell';
 import PushManager from '@/components/PushManager';
 import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
+import { useLive } from '@/lib/useLive';
 import { levelOf } from '@/lib/economy';
 import { weekStart, todayISO } from '@/lib/dates';
 import { Loader, Ring, Stat, Empty, toast } from '@/components/ui';
-import type { Badge, LedgerRow, Contract, Message } from '@/lib/types';
+import type { Badge, LedgerRow, Contract, Message, ChildItem } from '@/lib/types';
 
 export default function MePage() { return <ChildShell><Me /></ChildShell>; }
 
 function Me() {
-  const { profile, settings, signOut } = useApp();
+  const { profile, settings, signOut, refresh } = useApp();
   const [badges, setBadges] = useState<Badge[]>([]);
   const [owned, setOwned] = useState<Set<string>>(new Set());
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [contract, setContract] = useState<Contract | null>(null);
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [doneCount, setDoneCount] = useState(0);
+  const [items, setItems] = useState<ChildItem[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!profile) return;
-    (async () => {
-      const [b, o, l, c, m, t] = await Promise.all([
+    {
+      const [b, o, l, c, m, t, it] = await Promise.all([
         supabase.from('badges').select('*'),
         supabase.from('earned_badges').select('code').eq('child_id', profile.id),
         supabase.from('ledger').select('*').eq('child_id', profile.id).order('created_at', { ascending: false }).limit(15),
         supabase.from('contracts').select('*').eq('child_id', profile.id).eq('week_start', weekStart(todayISO())).maybeSingle(),
         supabase.from('messages').select('*').eq('to_id', profile.id).order('created_at', { ascending: false }).limit(8),
         supabase.from('tasks').select('id', { count: 'exact', head: true }).eq('child_id', profile.id).eq('status', 'done'),
+        supabase.from('child_items').select('*').eq('child_id', profile.id).order('acquired_at'),
       ]);
       setBadges((b.data ?? []) as Badge[]);
       setOwned(new Set((o.data ?? []).map((x: any) => x.code)));
@@ -39,9 +42,13 @@ function Me() {
       setContract((c.data as Contract) ?? null);
       setMsgs((m.data ?? []) as Message[]);
       setDoneCount(t.count ?? 0);
+      setItems((it.data ?? []) as ChildItem[]);
       setLoading(false);
-    })();
+    }
   }, [profile?.id]);
+
+  useEffect(() => { load(); }, [load]);
+  useLive(['messages', 'ledger', 'earned_badges', 'contracts', 'child_items', 'profiles'], load, 'me');
 
   if (loading || !profile || !settings) return <Loader />;
   const lvl = levelOf(profile.xp, settings.xp_per_level);
@@ -59,6 +66,25 @@ function Me() {
         <p className="text-lg font-extrabold text-grape">{lvl.title}</p>
         <p className="mt-2 font-bold text-muted">{lvl.into} / {lvl.per} XP</p>
       </section>
+
+      {items.length > 1 && (
+        <section>
+          <h2 className="mb-3 text-lg font-black text-ink">🎭 Mes avatars</h2>
+          <div className="scroll-x flex gap-2.5 pb-1">
+            {items.filter((i) => i.item_type === 'avatar').map((i) => (
+              <button key={i.id}
+                      onClick={async () => {
+                        await supabase.from('profiles').update({ avatar_emoji: i.item_value }).eq('id', profile.id);
+                        await refresh();
+                      }}
+                      className={clsx('grid h-16 w-16 shrink-0 place-items-center rounded-3xl border-2 text-3xl no-select transition active:scale-90',
+                        profile.avatar_emoji === i.item_value ? 'border-grape bg-grape-light scale-105' : 'border-line bg-card')}>
+                {i.item_value}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="flex gap-2.5">
         <Stat emoji="🔥" value={profile.streak_current} label="série" color="#F5A524" />
@@ -103,7 +129,9 @@ function Me() {
       )}
 
       {!!msgs.length && (
-        <ul className="space-y-2.5">
+        <section>
+          <h2 className="mb-3 text-lg font-black text-ink">💬 Mes messages</h2>
+          <ul className="space-y-2.5">
           {msgs.map((m) => (
             <li key={m.id} className="card flex items-start gap-3 p-4">
               <span className="text-3xl">{m.emoji ?? '💬'}</span>
@@ -114,8 +142,9 @@ function Me() {
                 </p>
               </div>
             </li>
-          ))}
-        </ul>
+            ))}
+          </ul>
+        </section>
       )}
 
       <section>

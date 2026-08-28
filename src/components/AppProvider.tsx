@@ -77,15 +77,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => sub.subscription.unsubscribe();
   }, [loadAll]);
 
-  // Ping de présence — le parent voit si l'app a été ouverte récemment.
-  useEffect(() => {
-    if (!profile) return;
-    const ping = () => { supabase.from('profiles').update({ last_seen_at: new Date().toISOString() }).eq('id', profile.id).then(() => {}); };
-    ping();
-    const t = setInterval(ping, 4 * 60 * 1000);
-    return () => clearInterval(t);
-  }, [profile?.id]);
-
   /**
    * Synchronisation permanente des profils et des réglages.
    * Le solde, la série, le niveau et le barème changent depuis l'autre

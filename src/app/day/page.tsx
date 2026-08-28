@@ -4,6 +4,7 @@ import clsx from 'clsx';
 import ChildShell from '@/components/ChildShell';
 import { useApp } from '@/components/AppProvider';
 import { useDay } from '@/lib/useDay';
+import { useLive } from '@/lib/useLive';
 import { todayISO, addDaysISO, relativeDay, hhmm, humanDuration, dayShort, dowOf, weekStart } from '@/lib/dates';
 import { progressOf } from '@/lib/economy';
 import { Loader, Bar, Empty } from '@/components/ui';
@@ -14,7 +15,8 @@ export default function DayPage() { return <ChildShell><Day /></ChildShell>; }
 function Day() {
   const { profile, settings } = useApp();
   const [day, setDay] = useState(todayISO());
-  const { tasks, loading } = useDay(profile?.id, day);
+  const { tasks, loading, reload } = useDay(profile?.id, day);
+  useLive(['subjects'], reload, 'child-day');
   const prog = progressOf(tasks);
   const week = Array.from({ length: 7 }, (_, i) => addDaysISO(weekStart(day), i));
 

@@ -56,6 +56,7 @@ export interface Settings {
   xp_per_quiz_answer: number;
   level_up_coins: number;
   daily_xp_goal: number;
+  mood_per_day: number;
   notif_parent: Record<ParentNotifKind, boolean>;
   notif_child: Record<ChildNotifKind, boolean>;
 }
@@ -129,6 +130,15 @@ export interface Reward {
   id: string; name: string; description: string | null; emoji: string; cost: number;
   category: string; condition: string | null; stock: number | null;
   limit_per_week: number | null; active: boolean; position: number;
+  /** `action` = à accorder par le parent · `item` = débloqué immédiatement dans l'app */
+  kind: 'action' | 'item';
+  item_type: string | null;
+  item_value: string | null;
+}
+
+export interface ChildItem {
+  id: string; child_id: string; reward_id: string | null;
+  item_type: string; item_value: string; acquired_at: string;
 }
 
 export interface Redemption {

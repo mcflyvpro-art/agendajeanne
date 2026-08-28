@@ -1,9 +1,10 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import clsx from 'clsx';
 import ChildShell from '@/components/ChildShell';
 import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
+import { useLive } from '@/lib/useLive';
 import { Loader, Empty, Ring, toast } from '@/components/ui';
 import { checkBadges, notify } from '@/lib/actions';
 import { compressImage } from '@/lib/image';
@@ -19,14 +20,15 @@ function QuizHome() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!profile) return;
     const { data } = await supabase.from('quizzes').select('*').eq('child_id', profile.id)
       .order('created_at', { ascending: false }).limit(30);
     setList((data ?? []) as Quiz[]);
     setLoading(false);
-  };
-  useEffect(() => { load(); }, [profile?.id]);
+  }, [profile?.id]);
+  useEffect(() => { load(); }, [load]);
+  useLive(['quizzes'], load, 'child-quiz');
 
   const create = async (file: File) => {
     setBusy(true);

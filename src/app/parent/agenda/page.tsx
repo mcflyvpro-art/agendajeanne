@@ -6,6 +6,7 @@ import ParentShell from '@/components/ParentShell';
 import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
 import { useDay } from '@/lib/useDay';
+import { useLive } from '@/lib/useLive';
 import { todayISO, addDaysISO, weekStart, dayShort, dowOf, hhmm, longDate, humanDuration } from '@/lib/dates';
 import { suggestCoins } from '@/lib/economy';
 import { notify } from '@/lib/actions';
@@ -37,6 +38,7 @@ function Agenda() {
   const [copyOpen, setCopyOpen] = useState(false);
 
   const week = useMemo(() => Array.from({ length: 7 }, (_, i) => addDaysISO(weekStart(day), i)), [day]);
+  useLive(['routines', 'subjects'], reload, 'parent-agenda');
   const load = useMemo(() => tasks.reduce((n, t) => n + (t.status === 'skipped' ? 0 : t.duration_min), 0), [tasks]);
   if (loading || !child || !settings) return <Loader />;
   const over = load > settings.max_daily_minutes;

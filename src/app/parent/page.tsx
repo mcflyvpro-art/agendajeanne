@@ -7,6 +7,7 @@ import PushManager from '@/components/PushManager';
 import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
 import { useDay } from '@/lib/useDay';
+import { useLive } from '@/lib/useLive';
 import { todayISO, hhmm, nowMinutes, toMinutes, longDate } from '@/lib/dates';
 import { progressOf, computeAward, levelOf, xpToday } from '@/lib/economy';
 import { settleDay, adjustBalance, elapsedOf, notify } from '@/lib/actions';
@@ -40,15 +41,7 @@ function Dashboard() {
   };
   useEffect(() => { load(); }, [child?.id, profile?.id]);
 
-  useEffect(() => {
-    if (!child) return;
-    const ch = supabase.channel('parent-live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'redemptions' }, load)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, load)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'moods' }, load)
-      .subscribe();
-    return () => { supabase.removeChannel(ch); };
-  }, [child?.id]);
+  useLive(['redemptions', 'messages', 'moods', 'ledger', 'child_items'], load, 'parent-home');
 
   const submitted = useMemo(() => tasks.filter((t) => t.status === 'submitted'), [tasks]);
   const doing = useMemo(() => tasks.find((t) => t.status === 'doing'), [tasks]);
@@ -111,7 +104,7 @@ function Dashboard() {
         {mood && <span className="text-4xl">{moodEmoji(mood.code, mood.mood)}</span>}
       </header>
 
-      <Presence child={child} doing={doing} />
+      <Presence doing={doing} />
       <PushManager />
 
       {!child.push_enabled && (
@@ -226,41 +219,34 @@ function Dashboard() {
 }
 
 /* ------------------------------------------------------------- présence -- */
-function Presence({ child, doing }: { child: any; doing?: Task }) {
+/**
+ * Affiche uniquement l'état d'une tâche en cours, qui est fiable : il vient du
+ * minuteur, écrit en base à chaque changement de visibilité. L'ancien indicateur
+ * « sur l'app / vue il y a X » reposait sur un ping périodique trop imprécis
+ * pour être affiché, il a été retiré.
+ */
+function Presence({ doing }: { doing?: Task }) {
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
+  if (!doing) return null;
 
-  const seenMin = child.last_seen_at ? Math.round((Date.now() - new Date(child.last_seen_at).getTime()) / 60000) : null;
-  const onApp = seenMin !== null && seenMin < 3;
-
-  if (doing) {
-    const sec = elapsedOf(doing);
-    const mm = String(Math.floor(sec / 60)).padStart(2, '0');
-    const ss = String(sec % 60).padStart(2, '0');
-    const running = doing.timer_running;
-    return (
-      <section className={clsx('card border-2 p-4', running ? 'border-leaf bg-leaf-light' : 'border-sun bg-sun-light')}>
-        <div className="flex items-center gap-3">
-          <span className="text-3xl">{running ? '▶️' : '⏸️'}</span>
-          <div className="min-w-0 flex-1">
-            <p className={clsx('text-sm font-black', running ? 'text-leaf-dark' : 'text-sun-dark')}>
-              {running ? 'Travaille en ce moment' : 'A quitté l’app — chrono en pause'}
-            </p>
-            <p className="truncate font-extrabold text-ink">{doing.title}</p>
-          </div>
-          <span className="shrink-0 text-2xl font-black tabular-nums text-ink">{mm}:{ss}</span>
-        </div>
-      </section>
-    );
-  }
+  const sec = elapsedOf(doing);
+  const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+  const ss = String(sec % 60).padStart(2, '0');
+  const running = doing.timer_running;
 
   return (
-    <section className={clsx('card border-2 p-3.5', onApp ? 'border-sky bg-sky-light' : 'border-line')}>
-      <p className="text-center font-extrabold text-ink">
-        {onApp ? '📱 Sur l’app' : seenMin === null ? '💤 Jamais connectée'
-          : seenMin < 60 ? `💤 Vue il y a ${seenMin} min`
-          : `💤 Vue il y a ${Math.round(seenMin / 60)} h`}
-      </p>
+    <section className={clsx('card border-2 p-4', running ? 'border-leaf bg-leaf-light' : 'border-sun bg-sun-light')}>
+      <div className="flex items-center gap-3">
+        <span className="text-3xl">{running ? '▶️' : '⏸️'}</span>
+        <div className="min-w-0 flex-1">
+          <p className={clsx('text-sm font-black', running ? 'text-leaf-dark' : 'text-sun-dark')}>
+            {running ? 'Travaille en ce moment' : 'En pause — a quitté l’app'}
+          </p>
+          <p className="truncate font-extrabold text-ink">{doing.title}</p>
+        </div>
+        <span className="shrink-0 text-2xl font-black tabular-nums text-ink">{mm}:{ss}</span>
+      </div>
     </section>
   );
 }

@@ -1,10 +1,11 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import clsx from 'clsx';
 import { ChevronLeft } from 'lucide-react';
 import ParentShell from '@/components/ParentShell';
 import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
+import { useLive } from '@/lib/useLive';
 import { todayISO, addDaysISO, dayShort, dowOf } from '@/lib/dates';
 import { moodEmoji } from '@/lib/mood';
 import { Loader, Stat, Bar, Empty, SegmentedTabs } from '@/components/ui';
@@ -34,10 +35,10 @@ function Activity() {
   const [range, setRange] = useState(14);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!child) return;
     const from = addDaysISO(todayISO(), -(range - 1));
-    (async () => {
+    {
       const [t, m] = await Promise.all([
         supabase.from('tasks').select('*, subject:subjects(*)').eq('child_id', child.id).gte('day', from).lte('day', todayISO()),
         supabase.from('moods').select('*').eq('child_id', child.id).gte('day', from).order('day'),
@@ -45,8 +46,11 @@ function Activity() {
       setTasks((t.data ?? []) as Task[]);
       setMoods((m.data ?? []) as Mood[]);
       setLoading(false);
-    })();
+    }
   }, [child?.id, range]);
+
+  useEffect(() => { load(); }, [load]);
+  useLive(['tasks', 'moods'], load, 'stats-activity');
 
   if (loading || !child) return <Loader />;
 
@@ -160,7 +164,7 @@ function Activity() {
         </section>
       )}
 
-      {total === 0 && <Empty emoji="📊" title="Pas encore de données" />}
+      {total === 0 && <Empty emoji="📊" title="Aucune tâche sur la période" />}
     </div>
   );
 }
@@ -172,9 +176,9 @@ function QuizReview() {
   const [open, setOpen] = useState<(Quiz & { attempts: QuizAttempt[] }) | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!child) return;
-    (async () => {
+    {
       const [q, a] = await Promise.all([
         supabase.from('quizzes').select('*').eq('child_id', child.id).order('created_at', { ascending: false }),
         supabase.from('quiz_attempts').select('*').eq('child_id', child.id).order('created_at', { ascending: false }),
@@ -182,8 +186,11 @@ function QuizReview() {
       const attempts = (a.data ?? []) as QuizAttempt[];
       setList(((q.data ?? []) as Quiz[]).map((x) => ({ ...x, attempts: attempts.filter((t) => t.quiz_id === x.id) })));
       setLoading(false);
-    })();
+    }
   }, [child?.id]);
+
+  useEffect(() => { load(); }, [load]);
+  useLive(['quizzes', 'quiz_attempts'], load, 'stats-quiz');
 
   if (loading) return <Loader />;
   if (open) return <QuizDetail quiz={open} onBack={() => setOpen(null)} />;
@@ -229,9 +236,11 @@ function QuizDetail({ quiz, onBack }: { quiz: Quiz & { attempts: QuizAttempt[] }
       <button onClick={onBack} className="chip"><ChevronLeft size={14} /> Retour</button>
       <h2 className="text-2xl font-black text-ink">{quiz.title}</h2>
 
-      {chrono.length > 1 && (
+      {chrono.length > 0 && (
         <section className="card p-4">
-          <p className="mb-3 font-black text-ink">Progression</p>
+          <p className="mb-3 font-black text-ink">
+            Progression{chrono.length === 1 ? ' — 1 tentative' : ` — ${chrono.length} tentatives`}
+          </p>
           <div className="flex items-end gap-2" style={{ height: 90 }}>
             {chrono.map((a) => {
               const pct = a.total ? Math.round((a.score / a.total) * 100) : 0;

@@ -1,11 +1,12 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import clsx from 'clsx';
 import ChildShell from '@/components/ChildShell';
 import PushManager from '@/components/PushManager';
 import { useApp } from '@/components/AppProvider';
 import { useDay } from '@/lib/useDay';
+import { useLive } from '@/lib/useLive';
 import { useTaskTimer } from '@/lib/useTimer';
 import { supabase } from '@/lib/supabase';
 import { todayISO, hhmm, humanDuration, fromMinutes, toMinutes, nowMinutes } from '@/lib/dates';
@@ -28,6 +29,8 @@ function Now() {
     () => tasks.find((t) => t.status === 'doing') ?? tasks.find((t) => t.status === 'todo') ?? null,
     [tasks]
   );
+
+  useLive(['messages', 'rewards', 'contracts', 'profiles'], refresh, 'now');
 
   if (loading || !settings || !profile) return <Loader />;
   const prog = progressOf(tasks);
@@ -109,45 +112,52 @@ function Header({ xp, prog }: { xp: number; prog: { done: number; total: number;
 }
 
 /* ------------------------------------------------------------------ humeur */
+/**
+ * Disparaît une fois le quota du jour atteint (réglable côté parent, 1 par
+ * défaut) : sans ça, l'écran d'accueil garde en permanence une question déjà
+ * répondue.
+ */
 function MoodRow() {
-  const { profile } = useApp();
-  const [chosen, setChosen] = useState<string | null>(null);
+  const { profile, settings } = useApp();
+  const [todayMoods, setTodayMoods] = useState<{ code: string | null }[]>([]);
   const [more, setMore] = useState(false);
+  const [ready, setReady] = useState(false);
   const today = todayISO();
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!profile) return;
-    supabase.from('moods').select('code').eq('child_id', profile.id).eq('day', today).maybeSingle()
-      .then(({ data }) => setChosen((data?.code as string) ?? null));
+    const { data } = await supabase.from('moods').select('code')
+      .eq('child_id', profile.id).eq('day', today).order('created_at');
+    setTodayMoods((data ?? []) as { code: string | null }[]);
+    setReady(true);
   }, [profile?.id, today]);
 
-  if (!profile) return null;
+  useEffect(() => { load(); }, [load]);
+
+  if (!profile || !settings || !ready) return null;
+
+  const limit = Math.max(1, settings.mood_per_day ?? 1);
+  if (todayMoods.length >= limit) return null;
 
   const pick = async (code: string, value: number, emoji: string) => {
-    setChosen(code);
-    setMore(false);
-    await supabase.from('moods').upsert(
-      { child_id: profile.id, day: today, mood: value, code }, { onConflict: 'child_id,day' }
-    );
+    setTodayMoods((m) => [...m, { code }]);
+    await supabase.from('moods').insert({ child_id: profile.id, day: today, mood: value, code });
     A.notify('mood', { code, value, emoji });
   };
 
-  const all = [...MOOD_SCALE, ...MOOD_SPECIAL];
-  const shown = more ? all : MOOD_SCALE;
+  const shown = more ? [...MOOD_SCALE, ...MOOD_SPECIAL] : MOOD_SCALE;
 
   return (
     <section className="card p-4">
       <div className="flex items-center justify-between">
         <p className="text-base font-extrabold text-ink">Comment tu te sens ?</p>
-        <button onClick={() => setMore((m) => !m)} className="text-2xl no-select active:scale-90">
-          {more ? '➖' : '➕'}
-        </button>
+        <button onClick={() => setMore((m) => !m)} aria-label="Plus d’humeurs"
+                className="text-2xl no-select active:scale-90">{more ? '➖' : '➕'}</button>
       </div>
-      <div className={clsx('mt-3 grid gap-2', more ? 'grid-cols-5' : 'grid-cols-5')}>
+      <div className="mt-3 grid grid-cols-5 gap-2">
         {shown.map((m) => (
           <button key={m.code} onClick={() => pick(m.code, m.value, m.emoji)} aria-label={m.label}
-                  className={clsx('grid aspect-square place-items-center rounded-3xl border-2 text-3xl transition no-select active:scale-90',
-                    chosen === m.code ? 'border-grape bg-grape-light scale-105' : 'border-line bg-card')}>
+                  className="grid aspect-square place-items-center rounded-3xl border-2 border-line bg-card text-3xl transition no-select active:scale-90">
             {m.emoji}
           </button>
         ))}
