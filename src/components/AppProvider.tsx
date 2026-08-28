@@ -1,5 +1,5 @@
 'use client';
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import type { Profile, Settings, Subject } from '@/lib/types';
@@ -10,7 +10,9 @@ interface Ctx {
   child: Profile | null;
   settings: Settings | null;
   subjects: Subject[];
-  loading: boolean;
+  /** Faux tant que la session ET le profil ne sont pas résolus. */
+  ready: boolean;
+  loadError: string | null;
   isParent: boolean;
   refresh: () => Promise<void>;
   refreshChild: () => Promise<void>;
@@ -20,94 +22,117 @@ interface Ctx {
 const AppCtx = createContext<Ctx>(null as any);
 export const useApp = () => useContext(AppCtx);
 
+/** Au-delà de ce délai en arrière-plan, la session parent est fermée. */
+const PARENT_IDLE_MS = 5 * 60 * 1000;
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [child, setChild] = useState<Profile | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadAll = useCallback(async (uid: string) => {
-    const [p, s, subj] = await Promise.all([
-      supabase.from('profiles').select('*').eq('id', uid).maybeSingle(),
-      supabase.from('settings').select('*').eq('id', 1).maybeSingle(),
-      supabase.from('subjects').select('*').eq('active', true).order('position'),
-    ]);
-    setProfile((p.data as Profile) ?? null);
-    setSettings((s.data as Settings) ?? null);
-    setSubjects((subj.data as Subject[]) ?? []);
+    try {
+      const [p, s, subj] = await Promise.all([
+        supabase.from('profiles').select('*').eq('id', uid).maybeSingle(),
+        supabase.from('settings').select('*').eq('id', 1).maybeSingle(),
+        supabase.from('subjects').select('*').eq('active', true).order('position'),
+      ]);
 
-    const childId = (s.data as Settings | null)?.child_id;
-    if ((p.data as Profile)?.role === 'child') {
-      setChild(p.data as Profile);
-    } else if (childId) {
-      const c = await supabase.from('profiles').select('*').eq('id', childId).maybeSingle();
-      setChild((c.data as Profile) ?? null);
-    } else {
-      const c = await supabase.from('profiles').select('*').eq('role', 'child').limit(1).maybeSingle();
-      setChild((c.data as Profile) ?? null);
+      // Une erreur ici laissait l'app tourner en boucle sur un écran de
+      // chargement : on la remonte pour pouvoir l'afficher.
+      const err = p.error ?? s.error ?? subj.error;
+      if (err) { setLoadError(err.message); return; }
+      if (!p.data) { setLoadError('Aucun profil associé à ce compte.'); return; }
+
+      setLoadError(null);
+      setProfile(p.data as Profile);
+      setSettings((s.data as Settings) ?? null);
+      setSubjects((subj.data as Subject[]) ?? []);
+
+      const me = p.data as Profile;
+      if (me.role === 'child') {
+        setChild(me);
+      } else {
+        const childId = (s.data as Settings | null)?.child_id;
+        const c = childId
+          ? await supabase.from('profiles').select('*').eq('id', childId).maybeSingle()
+          : await supabase.from('profiles').select('*').eq('role', 'child').limit(1).maybeSingle();
+        setChild((c.data as Profile) ?? null);
+      }
+    } catch (e: any) {
+      setLoadError(e?.message ?? 'Connexion impossible');
     }
   }, []);
 
   const refresh = useCallback(async () => {
     if (session?.user?.id) await loadAll(session.user.id);
-  }, [session, loadAll]);
+  }, [session?.user?.id, loadAll]);
 
   const refreshChild = useCallback(async () => {
     if (!child) return;
     const c = await supabase.from('profiles').select('*').eq('id', child.id).maybeSingle();
     if (c.data) {
       setChild(c.data as Profile);
-      if (profile?.id === child.id) setProfile(c.data as Profile);
+      setProfile((p) => (p && p.id === c.data!.id ? (c.data as Profile) : p));
     }
-  }, [child, profile]);
-
-  useEffect(() => {
-    supabase.auth.getSession().then(async ({ data }) => {
-      setSession(data.session);
-      if (data.session?.user?.id) await loadAll(data.session.user.id);
-      setLoading(false);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_e, s) => {
-      setSession(s);
-      if (s?.user?.id) await loadAll(s.user.id);
-      else { setProfile(null); setChild(null); }
-    });
-    return () => sub.subscription.unsubscribe();
-  }, [loadAll]);
+  }, [child?.id]);
 
   /**
-   * Synchronisation permanente des profils et des réglages.
-   * Le solde, la série, le niveau et le barème changent depuis l'autre
-   * appareil : sans cet abonnement il fallait recharger la page pour les voir.
+   * Amorçage. `ready` ne passe à vrai qu'une fois le profil résolu : sans ça,
+   * un instant existe où la session est posée mais le profil pas encore, et
+   * les écrans redirigent alors vers la mauvaise interface.
    */
   useEffect(() => {
+    let alive = true;
+
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (!alive) return;
+      setSession(data.session);
+      if (data.session?.user?.id) await loadAll(data.session.user.id);
+      if (alive) setReady(true);
+    });
+
+    const { data: sub } = supabase.auth.onAuthStateChange(async (event, s) => {
+      if (!alive) return;
+      if (event === 'TOKEN_REFRESHED') { setSession(s); return; }
+
+      setReady(false);
+      setSession(s);
+      if (s?.user?.id) await loadAll(s.user.id);
+      else { setProfile(null); setChild(null); setLoadError(null); }
+      if (alive) setReady(true);
+    });
+
+    return () => { alive = false; sub.subscription.unsubscribe(); };
+  }, [loadAll]);
+
+  /** Profils et réglages suivis en direct, pour que les deux appareils restent alignés. */
+  useEffect(() => {
     if (!session) return;
-    const applyProfile = (row: Profile) => {
-      setProfile((p) => (p && p.id === row.id ? { ...p, ...row } : p));
-      setChild((c) => (c && c.id === row.id ? { ...c, ...row } : c));
-    };
     const ch = supabase
       .channel('app-sync')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' },
-        (payload) => { if (payload.new && (payload.new as Profile).id) applyProfile(payload.new as Profile); })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' },
-        (payload) => { if (payload.new) setSettings(payload.new as Settings); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
+        const row = payload.new as Profile;
+        if (!row?.id) return;
+        setProfile((p) => (p && p.id === row.id ? { ...p, ...row } : p));
+        setChild((c) => (c && c.id === row.id ? { ...c, ...row } : c));
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, (payload) => {
+        if (payload.new) setSettings(payload.new as Settings);
+      })
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [session?.user?.id]);
 
-  /**
-   * Filet de sécurité : au retour dans l'app (déverrouillage, changement
-   * d'onglet, reprise réseau), on resynchronise. Le temps réel peut avoir
-   * manqué des événements pendant la mise en veille de l'appareil.
-   */
+  /** Resynchronisation au retour au premier plan et au retour du réseau. */
   useEffect(() => {
-    if (!session?.user?.id) return;
-    const resync = () => {
-      if (document.visibilityState === 'visible') loadAll(session.user.id);
-    };
+    const uid = session?.user?.id;
+    if (!uid) return;
+    const resync = () => { if (document.visibilityState === 'visible') loadAll(uid); };
     document.addEventListener('visibilitychange', resync);
     window.addEventListener('online', resync);
     return () => {
@@ -116,32 +141,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, [session?.user?.id, loadAll]);
 
-  // Enregistrement du service worker (indispensable aux notifications iOS)
   useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
-    }
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, []);
 
   /**
-   * Le parent doit se reconnecter à chaque utilisation (il valide de l'argent
-   * de poche et des récompenses). L'enfant, elle, reste connectée à vie —
-   * comportement par défaut de Supabase, rien à faire de ce côté.
+   * Le compte parent ne reste pas connecté indéfiniment (il valide de l'argent
+   * de poche). Mais fermer la session au moindre passage en arrière-plan rendait
+   * l'app inutilisable : l'autofill du mot de passe suffisait à déconnecter.
+   * On ne ferme donc qu'après une absence prolongée.
    */
+  const hiddenAt = useRef<number | null>(null);
   useEffect(() => {
-    if (profile?.role !== 'parent') return;
-    const onHide = () => {
-      if (document.visibilityState === 'hidden') supabase.auth.signOut({ scope: 'local' });
+    if (!ready || profile?.role !== 'parent') return;
+    const onChange = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt.current = Date.now();
+      } else if (hiddenAt.current && Date.now() - hiddenAt.current > PARENT_IDLE_MS) {
+        hiddenAt.current = null;
+        supabase.auth.signOut({ scope: 'local' });
+      } else {
+        hiddenAt.current = null;
+      }
     };
-    document.addEventListener('visibilitychange', onHide);
-    return () => document.removeEventListener('visibilitychange', onHide);
-  }, [profile?.role]);
+    document.addEventListener('visibilitychange', onChange);
+    return () => document.removeEventListener('visibilitychange', onChange);
+  }, [ready, profile?.role]);
 
-  const signOut = useCallback(async () => { await supabase.auth.signOut(); location.href = '/login'; }, []);
+  const signOut = useCallback(async () => {
+    await supabase.auth.signOut();
+    location.href = '/login';
+  }, []);
 
   return (
     <AppCtx.Provider value={{
-      session, profile, child, settings, subjects, loading,
+      session, profile, child, settings, subjects, ready, loadError,
       isParent: profile?.role === 'parent', refresh, refreshChild, signOut,
     }}>
       {children}

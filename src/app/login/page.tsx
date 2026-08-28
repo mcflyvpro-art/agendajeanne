@@ -9,10 +9,10 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
   const [busy, setBusy] = useState(false);
-  const { session, loading } = useApp();
+  const { session, ready } = useApp();
   const router = useRouter();
 
-  useEffect(() => { if (!loading && session) router.replace('/'); }, [session, loading, router]);
+  useEffect(() => { if (ready && session) router.replace('/'); }, [session, ready, router]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();

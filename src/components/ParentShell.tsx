@@ -6,6 +6,7 @@ import clsx from 'clsx';
 import { LayoutDashboard, CalendarRange, Gift, BarChart3, SlidersHorizontal } from 'lucide-react';
 import { useApp } from '@/components/AppProvider';
 import { Loader, Toaster } from '@/components/ui';
+import LoadFailure from '@/components/LoadFailure';
 
 const TABS = [
   { href: '/parent',          label: 'Bord',    Icon: LayoutDashboard },
@@ -16,17 +17,18 @@ const TABS = [
 ];
 
 export default function ParentShell({ children }: { children: React.ReactNode }) {
-  const { session, profile, loading } = useApp();
+  const { session, profile, ready, loadError } = useApp();
   const path = usePathname();
   const router = useRouter();
 
   useEffect(() => {
-    if (loading) return;
+    if (!ready || loadError) return;
     if (!session) router.replace('/login');
     else if (profile?.role === 'child') router.replace('/now');
-  }, [session, profile, loading, router]);
+  }, [session, profile, ready, loadError, router]);
 
-  if (loading || !profile) return <Loader />;
+  if (loadError) return <LoadFailure message={loadError} />;
+  if (!ready || !profile) return <Loader />;
 
   return (
     <div className="min-h-dvh pb-28">

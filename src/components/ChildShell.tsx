@@ -5,6 +5,7 @@ import { useEffect } from 'react';
 import clsx from 'clsx';
 import { useApp } from '@/components/AppProvider';
 import { Loader, Toaster } from '@/components/ui';
+import LoadFailure from '@/components/LoadFailure';
 
 const TABS = [
   { href: '/now',   label: 'Aujourd’hui', emoji: '🎯' },
@@ -15,17 +16,18 @@ const TABS = [
 ];
 
 export default function ChildShell({ children }: { children: React.ReactNode }) {
-  const { session, profile, loading } = useApp();
+  const { session, profile, ready, loadError } = useApp();
   const path = usePathname();
   const router = useRouter();
 
   useEffect(() => {
-    if (loading) return;
+    if (!ready || loadError) return;
     if (!session) router.replace('/login');
     else if (profile?.role === 'parent') router.replace('/parent');
-  }, [session, profile, loading, router]);
+  }, [session, profile, ready, loadError, router]);
 
-  if (loading || !profile) return <Loader />;
+  if (loadError) return <LoadFailure message={loadError} />;
+  if (!ready || !profile) return <Loader />;
 
   return (
     <div className="min-h-dvh pb-28">
