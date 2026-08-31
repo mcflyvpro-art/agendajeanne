@@ -25,3 +25,39 @@ export async function sendPush(sub: any, payload: PushPayload): Promise<{ ok: bo
     return { ok: false, gone: code === 404 || code === 410, error: `${code ?? ''} ${e?.message ?? e}`.trim() };
   }
 }
+
+/**
+ * Envoi à *tous* les appareils d'une personne : téléphone et ordinateur à la
+ * fois. Les abonnements morts sont nettoyés au passage, et le profil n'est
+ * marqué « injoignable » que s'il ne reste plus aucun appareil valide.
+ *
+ * `profiles.push_subscription` reste pris en charge : un appareil enregistré
+ * avant cette table continue de recevoir jusqu'à sa prochaine visite.
+ */
+export async function sendToProfile(db: any, profile: any, payload: PushPayload): Promise<number> {
+  const { data: devices } = await db.from('push_devices').select('*').eq('profile_id', profile.id);
+  const rows = (devices ?? []) as any[];
+
+  const targets: { sub: any; id: string | null }[] = rows.map((d) => ({ sub: d.subscription, id: d.id }));
+  const known = new Set(rows.map((d) => JSON.stringify(d.subscription?.endpoint ?? '')));
+  if (profile.push_subscription && !known.has(JSON.stringify((profile.push_subscription as any)?.endpoint ?? ''))) {
+    targets.push({ sub: profile.push_subscription, id: null });
+  }
+
+  let sent = 0;
+  let alive = 0;
+  for (const t of targets) {
+    const r = await sendPush(t.sub, payload);
+    if (r.ok) { sent += 1; alive += 1; continue; }
+    if (r.gone) {
+      if (t.id) await db.from('push_devices').delete().eq('id', t.id);
+      else await db.from('profiles').update({ push_subscription: null }).eq('id', profile.id);
+    } else {
+      alive += 1;  // erreur passagère : on ne supprime rien
+    }
+  }
+  if (targets.length && alive === 0) {
+    await db.from('profiles').update({ push_enabled: false }).eq('id', profile.id);
+  }
+  return sent;
+}

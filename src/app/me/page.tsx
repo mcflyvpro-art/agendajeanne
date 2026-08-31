@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase';
 import { useLive } from '@/lib/useLive';
 import { levelOf } from '@/lib/economy';
 import { weekStart, todayISO } from '@/lib/dates';
+import DeviceCard from '@/components/DeviceCard';
 import { Loader, Ring, Stat, Empty, Sheet, toast } from '@/components/ui';
 import type { Badge, LedgerRow, Contract, Message, ChildItem } from '@/lib/types';
 
@@ -176,6 +177,11 @@ function Me() {
             ))}
           </ul>
         )}
+      </section>
+
+      <section>
+        <p className="mb-3 text-lg font-black text-ink">📶 Cet appareil</p>
+        <DeviceCard />
       </section>
 
       <button onClick={signOut} className="btn-plain w-full">Se déconnecter</button>

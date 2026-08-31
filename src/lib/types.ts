@@ -114,6 +114,15 @@ export interface Task {
   parent_alerted: boolean;
   timer_running: boolean;
   timer_segment_at: string | null;
+  /** Appareil qui pilote le minuteur, pour qu'un autre ne le mette pas en pause. */
+  timer_device: string | null;
+  timer_device_kind: 'desktop' | 'mobile' | null;
+  /**
+   * Le devoir se fait sur le téléphone (manuel numérique, vidéo, appli).
+   * L'enfant peut alors quitter l'app sans que le chrono s'arrête — sinon elle
+   * reste bloquée, incapable d'atteindre le temps minimum.
+   */
+  work_on_phone: boolean;
   created_at: string;
   subtasks?: Subtask[];
   subject?: Subject | null;
@@ -124,7 +133,7 @@ export interface Subtask { id: string; task_id: string; label: string; done: boo
 export interface Routine {
   id: string; title: string; description: string | null; subject_id: string | null;
   days_of_week: number[]; start_time: string; duration_min: number; difficulty: number;
-  is_flexible: boolean; coins: number | null; require_photo: boolean | null;
+  is_flexible: boolean; coins: number | null; require_photo: boolean | null; work_on_phone: boolean;
   require_validation: boolean | null; min_timer_pct: number | null; link_url: string | null;
   subtasks: string[]; active: boolean; valid_from: string; valid_to: string | null;
 }

@@ -25,6 +25,7 @@ const emptyDraft = () => ({
   require_validation: null as boolean | null,
   min_timer_pct: null as number | null,
   allow_postpone: true,
+  work_on_phone: false,
   link_url: '', parent_note: '',
   subtasks: [] as string[],
 });
@@ -98,6 +99,7 @@ function Agenda() {
                       {t.routine_id && <span>↻</span>}
                       {t.require_photo && <span>📷</span>}
                       {t.require_validation && <span>👁️</span>}
+                      {t.work_on_phone && <span title="Travail sur téléphone">📱</span>}
                     </div>
                   </div>
                   <span className="shrink-0 text-xl">
@@ -126,7 +128,8 @@ function toDraft(t: Task): Draft {
     start_time: t.start_time ? hhmm(t.start_time) : '09:00', duration_min: t.duration_min,
     difficulty: t.difficulty, is_flexible: t.is_flexible, coins: t.coins, coinsAuto: false,
     require_photo: t.require_photo, require_validation: t.require_validation, min_timer_pct: t.min_timer_pct,
-    allow_postpone: t.allow_postpone, link_url: t.link_url ?? '', parent_note: t.parent_note ?? '',
+    allow_postpone: t.allow_postpone, work_on_phone: t.work_on_phone ?? false,
+    link_url: t.link_url ?? '', parent_note: t.parent_note ?? '',
     subtasks: (t.subtasks ?? []).map((s) => s.label),
   };
 }
@@ -155,6 +158,7 @@ function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string
         duration_min: d.duration_min, is_flexible: d.is_flexible, difficulty: d.difficulty,
         coins, require_photo: d.require_photo, require_validation: d.require_validation,
         min_timer_pct: d.min_timer_pct, allow_postpone: d.allow_postpone,
+        work_on_phone: d.work_on_phone,
         link_url: d.link_url.trim() || null, parent_note: d.parent_note.trim() || null,
       };
       let taskId = d.id;
@@ -360,6 +364,26 @@ function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string
 
           <div>
             <div className="mb-2 flex items-center gap-2">
+              <span className="text-sm font-extrabold text-ink">📱 Travail sur téléphone</span>
+              <Help title="Travail sur téléphone">
+                <p>À activer quand le devoir se fait <b>sur le téléphone</b> : manuel numérique, vidéo à regarder, application, recherche en ligne.</p>
+                <p>Normalement, le chronomètre se met en pause dès que Jeanne sort de l’agenda. Pour ce genre de tâche, c’est un piège : elle sort pour travailler, le temps ne compte plus, et le bouton « J’ai fini » ne se débloque jamais.</p>
+                <p>Avec ce réglage, <b>elle peut quitter l’app sans que le chrono s’arrête</b>. Un bouton Pause reste à sa disposition pour les vraies interruptions.</p>
+                <p>Sur ordinateur, le chrono continue de toute façon : changer de fenêtre fait partie du travail.</p>
+              </Help>
+            </div>
+            <button onClick={() => set('work_on_phone', !d.work_on_phone)}
+                    className={clsx('flex w-full items-center gap-3 rounded-3xl border-2 px-4 py-3.5 no-select',
+                      d.work_on_phone ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
+              <span className="text-2xl">{d.work_on_phone ? '📱' : '📵'}</span>
+              <span className="flex-1 text-left font-extrabold text-ink">
+                {d.work_on_phone ? 'Le chrono continue hors de l’app' : 'Le chrono se met en pause hors de l’app'}
+              </span>
+            </button>
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center gap-2">
               <span className="text-sm font-extrabold text-ink">⏭️ Report autorisé</span>
               <Help title="Report">
                 <p>Jeanne peut repousser la tâche de quelques minutes, un nombre limité de fois par jour.</p>
@@ -399,6 +423,7 @@ function RoutinesSheet({ open, onClose, onGenerated }: { open: boolean; onClose:
       days_of_week: form.days_of_week ?? [1, 2, 3, 4, 5],
       start_time: form.start_time, duration_min: form.duration_min ?? 45,
       difficulty: form.difficulty ?? 2, active: true,
+      work_on_phone: form.work_on_phone ?? false,
     };
     if (form.id) await supabase.from('routines').update(payload).eq('id', form.id);
     else await supabase.from('routines').insert(payload);
@@ -456,6 +481,12 @@ function RoutinesSheet({ open, onClose, onGenerated }: { open: boolean; onClose:
             <input type="time" className="field" value={form.start_time ?? '09:00'} onChange={(e) => setForm({ ...form, start_time: e.target.value })} />
             <NumberField value={form.duration_min ?? 45} min={5} onChange={(n) => setForm({ ...form, duration_min: n })} />
           </div>
+          <button onClick={() => setForm({ ...form, work_on_phone: !form.work_on_phone })}
+                  className={clsx('flex w-full items-center gap-3 rounded-3xl border-2 px-4 py-3.5 no-select',
+                    form.work_on_phone ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
+            <span className="text-2xl">{form.work_on_phone ? '📱' : '📵'}</span>
+            <span className="flex-1 text-left font-extrabold text-ink">Travail sur téléphone</span>
+          </button>
           <div className="flex gap-2.5">
             <button onClick={() => setForm(null)} className="btn-plain flex-1">Annuler</button>
             <button onClick={save} disabled={busy} className="btn-grape flex-1">Enregistrer</button>
@@ -503,6 +534,7 @@ function CopySheet({ open, onClose, day, tasks, onDone }: {
         is_flexible: t.is_flexible, difficulty: t.difficulty, coins: t.coins,
         require_photo: t.require_photo, require_validation: t.require_validation,
         min_timer_pct: t.min_timer_pct, allow_postpone: t.allow_postpone,
+        work_on_phone: t.work_on_phone ?? false,
         link_url: t.link_url, parent_note: t.parent_note,
       }).select('id').single();
       if (data && t.subtasks?.length) {

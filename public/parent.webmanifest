@@ -1,0 +1,94 @@
+{
+  "name": "Agenda — Parent",
+  "short_name": "Parent",
+  "description": "Le tableau de bord parent de l'Agenda de Jeanne",
+  "id": "/parent",
+  "start_url": "/parent?app=parent",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "minimal-ui"
+  ],
+  "orientation": "any",
+  "background_color": "#FAF7FF",
+  "theme_color": "#FAF7FF",
+  "categories": [
+    "education",
+    "productivity",
+    "lifestyle"
+  ],
+  "lang": "fr",
+  "dir": "ltr",
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  },
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Agenda",
+      "short_name": "Agenda",
+      "url": "/parent/agenda",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Boutique",
+      "short_name": "Boutique",
+      "url": "/parent/rewards",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Suivi",
+      "short_name": "Suivi",
+      "url": "/parent/stats",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Réglages",
+      "short_name": "Réglages",
+      "url": "/parent/rules",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ]
+}

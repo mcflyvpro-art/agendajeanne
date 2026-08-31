@@ -96,8 +96,10 @@ button::-moz-focus-inner { border: 0; }
   box-shadow: 0 -8px 30px -18px rgba(93, 58, 173, .5);
 }
 
-.ring { transform: rotate(-90deg); transform-origin: 50% 50%; }
-.ring circle { transition: stroke-dashoffset .8s cubic-bezier(.3,.9,.4,1); }
+/* Anciennement `.ring` : le nom entrait en collision avec l'utilitaire Tailwind
+   du même nom, qui dessinait un liseré bleu autour du minuteur. */
+.dial { transform: rotate(-90deg); transform-origin: 50% 50%; }
+.dial circle { transition: stroke-dashoffset .8s cubic-bezier(.3,.9,.4,1); }
 
 .stagger > * { animation: riseIn .4s cubic-bezier(.2,.9,.3,1) both; }
 .stagger > *:nth-child(1){animation-delay:.02s} .stagger > *:nth-child(2){animation-delay:.06s}
@@ -105,3 +107,59 @@ button::-moz-focus-inner { border: 0; }
 .stagger > *:nth-child(5){animation-delay:.18s} .stagger > *:nth-child(6){animation-delay:.22s}
 .stagger > *:nth-child(7){animation-delay:.26s} .stagger > *:nth-child(8){animation-delay:.30s}
 @keyframes riseIn { from { opacity:0; transform: translateY(14px) } to { opacity:1; transform:none } }
+
+/* ==========================================================================
+   Version bureau — Mac et PC
+   L'app reste la même : mêmes écrans, mêmes fonctions. Seule la présentation
+   change quand elle tourne dans une fenêtre d'ordinateur : colonne de
+   navigation à gauche, contenu plus large, survol, vraies barres de
+   défilement, et plus de zones tactiles surdimensionnées.
+   ========================================================================== */
+
+.sidebar {
+  background: rgba(255, 255, 255, .82);
+  backdrop-filter: blur(24px) saturate(170%);
+  border-right: 1px solid #EBE3F9;
+}
+
+/* Zone de titre déplaçable d'une PWA de bureau (Chrome, Edge). Sans le
+   support, la règle est simplement ignorée. */
+.drag-region { -webkit-app-region: drag; app-region: drag; }
+.drag-region button, .drag-region a { -webkit-app-region: no-drag; app-region: no-drag; }
+
+html.has-sidebar body { background-attachment: fixed; }
+
+/* Les écrans sont écrits pour un téléphone (`max-w-lg`). Devant un écran
+   d'ordinateur, la même colonne respire un peu plus, sans jamais s'étaler :
+   une ligne de texte trop longue se lit mal. */
+html.has-sidebar main { max-width: 46rem !important; }
+html.has-sidebar .tabbar { display: none; }
+
+@media (pointer: fine) {
+  /* De vraies barres de défilement : les masquer est une convention tactile. */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #E0D6F5; border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #CBBBEC; background-clip: content-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  .scroll-x { scrollbar-width: thin; }
+
+  input, select, textarea { font-size: 15px; }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .card, .tile { transition: box-shadow .18s ease, transform .18s ease; }
+  a.card:hover, button.card:hover { transform: translateY(-1px); }
+  .btn:hover:not(:disabled) { filter: brightness(1.04); }
+  .chip:hover { border-color: #CBBBEC; }
+  /* Le rebond au toucher n'a pas de sens à la souris. */
+  html.is-desktop .active\:scale-90:active,
+  html.is-desktop .active\:scale-95:active,
+  html.is-desktop .active\:scale-\[\.99\]:active { transform: none; }
+}
+
+/* Un clavier est branché : le focus doit se voir. */
+html.is-desktop :focus-visible {
+  outline: 3px solid rgba(124, 77, 238, .45);
+  outline-offset: 2px;
+  border-radius: 14px;
+}

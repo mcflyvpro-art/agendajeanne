@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useApp } from '@/components/AppProvider';
+import { deviceId, deviceKind, deviceLabel, isStandalone as standalone } from '@/lib/device';
 import { toast } from '@/components/ui';
 
 function urlB64ToUint8Array(base64: string) {
@@ -11,12 +12,33 @@ function urlB64ToUint8Array(base64: string) {
   return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
 }
 
-const isStandalone = () =>
-  typeof window !== 'undefined' &&
-  (window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true);
+const isStandalone = () => typeof window !== 'undefined' && standalone();
 
 const isIOS = () =>
   typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent) && !(window as any).MSStream;
+
+/**
+ * Un abonnement push appartient à un navigateur. Chaque appareil garde donc sa
+ * propre ligne : le téléphone et l'ordinateur reçoivent tous les deux, au lieu
+ * que le dernier connecté efface l'autre.
+ */
+async function saveSubscription(profileId: string, sub: PushSubscription) {
+  const json: any = sub.toJSON();
+  await supabase.from('push_devices').upsert({
+    profile_id: profileId,
+    device_id: deviceId(),
+    kind: deviceKind(),
+    label: deviceLabel(),
+    endpoint: json.endpoint,
+    subscription: json,
+    user_agent: navigator.userAgent.slice(0, 300),
+    last_seen_at: new Date().toISOString(),
+  }, { onConflict: 'profile_id,device_id' });
+
+  await supabase.from('profiles')
+    .update({ push_subscription: json, push_enabled: true, push_checked_at: new Date().toISOString() })
+    .eq('id', profileId);
+}
 
 export default function PushManager() {
   const { profile, refresh } = useApp();
@@ -32,20 +54,30 @@ export default function PushManager() {
     if (Notification.permission === 'denied') { setState('denied'); return; }
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.getSubscription();
-    setState(sub && profile.push_enabled ? 'ok' : 'need-permission');
-  }, [profile]);
+    if (sub && Notification.permission === 'granted') {
+      // Cet appareil est bien abonné : on tient sa ligne à jour. Les navigateurs
+      // renouvellent parfois l'abonnement tout seuls.
+      await saveSubscription(profile.id, sub);
+      setState('ok');
+      return;
+    }
+    setState('need-permission');
+  }, [profile?.id]);
 
   useEffect(() => { check(); }, [check]);
 
+  /**
+   * On ne marque plus le profil « injoignable » depuis un appareil.
+   * Avec un téléphone et un ordinateur, le Mac sans notifications éteignait
+   * les rappels du téléphone. Seul le serveur, qui voit tous les appareils,
+   * peut conclure que plus personne n'est joignable.
+   */
   useEffect(() => {
-    if (!profile || state === 'unknown') return;
-    const enabled = state === 'ok';
-    if (profile.push_enabled !== enabled) {
-      supabase.from('profiles')
-        .update({ push_enabled: enabled, push_checked_at: new Date().toISOString() })
-        .eq('id', profile.id).then(() => refresh());
-    }
-  }, [state, profile?.id]);
+    if (!profile || state !== 'ok' || profile.push_enabled) return;
+    supabase.from('profiles')
+      .update({ push_enabled: true, push_checked_at: new Date().toISOString() })
+      .eq('id', profile.id).then(() => refresh());
+  }, [state, profile?.id, profile?.push_enabled]);
 
   const enable = async () => {
     setBusy(true);
@@ -60,9 +92,7 @@ export default function PushManager() {
           applicationServerKey: urlB64ToUint8Array(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!),
         });
       }
-      await supabase.from('profiles')
-        .update({ push_subscription: sub.toJSON(), push_enabled: true, push_checked_at: new Date().toISOString() })
-        .eq('id', profile!.id);
+      await saveSubscription(profile!.id, sub);
       setState('ok');
       await refresh();
       toast('Notifications activées');

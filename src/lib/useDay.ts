@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { subscribeTables } from '@/lib/sync';
 import type { Task, Subtask } from '@/lib/types';
 import { toMinutes } from '@/lib/dates';
 
@@ -35,12 +36,7 @@ export function useDay(childId: string | undefined, day: string) {
 
   useEffect(() => {
     if (!childId) return;
-    const ch = supabase
-      .channel(`day-${childId}-${day}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `child_id=eq.${childId}` }, load)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'subtasks' }, load)
-      .subscribe();
-    return () => { supabase.removeChannel(ch); };
+    return subscribeTables(['tasks', 'subtasks', 'subjects'], load);
   }, [childId, day, load]);
 
   return { tasks, loading, reload: load };

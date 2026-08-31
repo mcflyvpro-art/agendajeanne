@@ -11,6 +11,7 @@ import Help, { LabelHelp } from '@/components/Help';
 import { resetChildAccount } from '@/lib/reset';
 import { Loader, SegmentedTabs, Toggle, NumberField, Sheet, toast } from '@/components/ui';
 import LevelRoad from '@/components/LevelRoad';
+import DeviceCard from '@/components/DeviceCard';
 import type { Reward } from '@/lib/types';
 import type { Settings, Tone, ParentNotifKind, ChildNotifKind } from '@/lib/types';
 
@@ -337,6 +338,10 @@ function Rules() {
             </div>
             <div className="card p-4">
               <p className="font-extrabold text-ink">👧 {child?.display_name ?? '—'}</p>
+            </div>
+            <div>
+              <label className="label">📶 Cet appareil</label>
+              <DeviceCard />
             </div>
             <button onClick={signOut} className="btn-plain w-full">Se déconnecter</button>
           </>

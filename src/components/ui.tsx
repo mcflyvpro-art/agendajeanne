@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
+import { useDevice } from '@/lib/device';
 
 export function Loader() {
   return (
@@ -19,6 +20,12 @@ export function Empty({ emoji, title }: { emoji: string; title: string }) {
   );
 }
 
+/**
+ * Feuille modale. Sur téléphone elle monte du bas et se referme au glissement ;
+ * sur Mac et PC elle devient une fenêtre centrée, fermée par Échap ou par un
+ * clic à côté — ce qu'attend quelqu'un devant un clavier. Même contenu, même
+ * code appelant.
+ */
 export function Sheet({ open, onClose, title, children, footer }: {
   open: boolean; onClose: () => void; title: string;
   children: React.ReactNode; footer?: React.ReactNode;
@@ -26,6 +33,14 @@ export function Sheet({ open, onClose, title, children, footer }: {
   const scroller = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState(0);
   const startY = useRef<number | null>(null);
+  const { desktop } = useDevice();
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
 
   /**
    * Verrouillage du fond. `overflow: hidden` seul ne suffit pas sur iOS : la
@@ -34,6 +49,14 @@ export function Sheet({ open, onClose, title, children, footer }: {
    */
   useEffect(() => {
     if (!open) return;
+    // Sur un écran d'ordinateur, `overflow: hidden` suffit ; le verrou en
+    // `position: fixed` n'existe que pour contourner le défilement d'iOS.
+    if (desktop) {
+      const b = document.body.style;
+      const prev = b.overflow;
+      b.overflow = 'hidden';
+      return () => { b.overflow = prev; };
+    }
     const y = window.scrollY;
     const b = document.body.style;
     const prev = { position: b.position, top: b.top, width: b.width, overflow: b.overflow };
@@ -46,9 +69,32 @@ export function Sheet({ open, onClose, title, children, footer }: {
       b.width = prev.width; b.overflow = prev.overflow;
       window.scrollTo(0, y);
     };
-  }, [open]);
+  }, [open, desktop]);
 
   if (!open) return null;
+
+  if (desktop) {
+    return (
+      <>
+        <div className="fixed inset-0 z-40 bg-ink/35 backdrop-blur-[2px] animate-[pop_.18s_ease-out]" onClick={onClose} />
+        <div className="fixed inset-0 z-50 grid place-items-center p-8" role="dialog" aria-modal="true">
+          <div className="flex max-h-[86dvh] w-full max-w-xl flex-col overflow-hidden rounded-[28px] bg-canvas shadow-lift"
+               style={{ animation: 'pop .18s cubic-bezier(.2,.9,.3,1)' }}
+               onClick={(e) => e.stopPropagation()}>
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b-2 border-line px-6 py-4">
+              <h2 className="text-xl font-black text-ink">{title}</h2>
+              <button onClick={onClose} aria-label="Fermer" title="Échap"
+                      className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-soft text-base font-black text-muted transition hover:bg-line">
+                ✕
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">{children}</div>
+            {footer && <div className="shrink-0 border-t-2 border-line px-6 py-4">{footer}</div>}
+          </div>
+        </div>
+      </>
+    );
+  }
 
   // Le glissement ne démarre que si le contenu est déjà en haut : sinon on
   // laisse l'utilisateur faire défiler normalement.
@@ -112,7 +158,7 @@ export function Ring({ pct, size = 200, stroke = 16, color = '#7C4DEE', track = 
   const c = 2 * Math.PI * r;
   return (
     <div className="relative grid place-items-center" style={{ width: size, height: size }}>
-      <svg width={size} height={size} className="ring absolute inset-0">
+      <svg width={size} height={size} className="dial absolute inset-0">
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={track} strokeWidth={stroke} />
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
                 strokeLinecap="round" strokeDasharray={c}

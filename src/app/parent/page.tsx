@@ -244,6 +244,12 @@ function Presence({ doing }: { doing?: Task }) {
   const mm = String(Math.floor(sec / 60)).padStart(2, '0');
   const ss = String(sec % 60).padStart(2, '0');
   const running = doing.timer_running;
+  const onComputer = doing.timer_device_kind === 'desktop';
+
+  // « A quitté l'app » n'est vrai que là où quitter l'app arrête le chrono :
+  // sur ordinateur, ou pour un devoir qui se fait sur le téléphone, la pause
+  // est toujours un choix délibéré.
+  const pausedLabel = onComputer || doing.work_on_phone ? 'En pause' : 'En pause — a quitté l’app';
 
   return (
     <section className={clsx('card border-2 p-4', running ? 'border-leaf bg-leaf-light' : 'border-sun bg-sun-light')}>
@@ -251,9 +257,13 @@ function Presence({ doing }: { doing?: Task }) {
         <span className="text-3xl">{running ? '▶️' : '⏸️'}</span>
         <div className="min-w-0 flex-1">
           <p className={clsx('text-sm font-black', running ? 'text-leaf-dark' : 'text-sun-dark')}>
-            {running ? 'Travaille en ce moment' : 'En pause — a quitté l’app'}
+            {running ? 'Travaille en ce moment' : pausedLabel}
           </p>
           <p className="truncate font-extrabold text-ink">{doing.title}</p>
+          <p className="mt-0.5 text-xs font-bold text-muted">
+            {onComputer ? '💻 sur ordinateur' : '📱 sur téléphone'}
+            {doing.work_on_phone && ' · devoir hors de l’app'}
+          </p>
         </div>
         <span className="shrink-0 text-2xl font-black tabular-nums text-ink">{mm}:{ss}</span>
       </div>

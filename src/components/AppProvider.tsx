@@ -2,6 +2,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
+import { startSync, stopSync, subscribeTables, resync } from '@/lib/sync';
+import { isDesktopDevice } from '@/lib/device';
 import type { Profile, Settings, Subject } from '@/lib/types';
 
 interface Ctx {
@@ -22,8 +24,12 @@ interface Ctx {
 const AppCtx = createContext<Ctx>(null as any);
 export const useApp = () => useContext(AppCtx);
 
-/** Au-delà de ce délai en arrière-plan, la session parent est fermée. */
-const PARENT_IDLE_MS = 5 * 60 * 1000;
+/**
+ * Au-delà de ce délai en arrière-plan, la session parent est fermée.
+ * Sur ordinateur, changer de fenêtre est le geste le plus banal qui soit :
+ * fermer la session au bout de cinq minutes y rendrait l'app inutilisable.
+ */
+const PARENT_IDLE_MS = () => (isDesktopDevice() ? 60 * 60 * 1000 : 5 * 60 * 1000);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -110,34 +116,45 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => { alive = false; sub.subscription.unsubscribe(); };
   }, [loadAll]);
 
-  /** Profils et réglages suivis en direct, pour que les deux appareils restent alignés. */
+  /**
+   * Synchronisation. Un seul canal pour toute l'app (`lib/sync`) : il gère la
+   * reconnexion, la relecture au réveil de l'appareil, la propagation entre
+   * fenêtres et la présence. Profil, réglages et matières se rechargent dès
+   * qu'un autre appareil les modifie — Mac, PC ou téléphone.
+   */
   useEffect(() => {
-    if (!session) return;
-    const ch = supabase
-      .channel('app-sync')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
-        const row = payload.new as Profile;
-        if (!row?.id) return;
-        setProfile((p) => (p && p.id === row.id ? { ...p, ...row } : p));
-        setChild((c) => (c && c.id === row.id ? { ...c, ...row } : c));
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, (payload) => {
-        if (payload.new) setSettings(payload.new as Settings);
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(ch); };
-  }, [session?.user?.id]);
+    if (!profile) return;
+    startSync({ id: profile.id, role: profile.role, name: profile.display_name });
+  }, [profile?.id, profile?.role, profile?.display_name]);
 
-  /** Resynchronisation au retour au premier plan et au retour du réseau. */
   useEffect(() => {
     const uid = session?.user?.id;
     if (!uid) return;
-    const resync = () => { if (document.visibilityState === 'visible') loadAll(uid); };
-    document.addEventListener('visibilitychange', resync);
-    window.addEventListener('online', resync);
+    return subscribeTables(['profiles', 'settings', 'subjects'], () => loadAll(uid));
+  }, [session?.user?.id, loadAll]);
+
+  /**
+   * Retour au premier plan : on rafraîchit la session avant tout le reste.
+   * Un jeton périmé pendant la nuit ferait échouer toutes les requêtes en
+   * silence, et l'app semblerait « bloquée » sur des données de la veille.
+   */
+  useEffect(() => {
+    const uid = session?.user?.id;
+    if (!uid) return;
+    const wake = async () => {
+      if (document.visibilityState !== 'visible') return;
+      const { data } = await supabase.auth.getSession();
+      if (data.session) setSession(data.session);
+      await loadAll(uid);
+      resync();
+    };
+    document.addEventListener('visibilitychange', wake);
+    window.addEventListener('focus', wake);
+    window.addEventListener('online', wake);
     return () => {
-      document.removeEventListener('visibilitychange', resync);
-      window.removeEventListener('online', resync);
+      document.removeEventListener('visibilitychange', wake);
+      window.removeEventListener('focus', wake);
+      window.removeEventListener('online', wake);
     };
   }, [session?.user?.id, loadAll]);
 
@@ -157,7 +174,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const onChange = () => {
       if (document.visibilityState === 'hidden') {
         hiddenAt.current = Date.now();
-      } else if (hiddenAt.current && Date.now() - hiddenAt.current > PARENT_IDLE_MS) {
+      } else if (hiddenAt.current && Date.now() - hiddenAt.current > PARENT_IDLE_MS()) {
         hiddenAt.current = null;
         supabase.auth.signOut({ scope: 'local' });
       } else {
@@ -169,6 +186,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [ready, profile?.role]);
 
   const signOut = useCallback(async () => {
+    stopSync();
     await supabase.auth.signOut();
     location.href = '/login';
   }, []);

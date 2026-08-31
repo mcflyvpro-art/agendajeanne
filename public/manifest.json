@@ -2,22 +2,31 @@
   "name": "Agenda Jeanne",
   "short_name": "Agenda",
   "description": "L'agenda et le système de motivation de Jeanne",
+  "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "portrait",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
   "background_color": "#FAF7FF",
   "theme_color": "#FAF7FF",
+  "categories": ["education", "productivity", "lifestyle"],
+  "lang": "fr",
+  "dir": "ltr",
+  "launch_handler": { "client_mode": "focus-existing" },
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/icons/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
       "src": "/icons/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
       "src": "/icons/maskable-512.png",
@@ -25,5 +34,11 @@
       "type": "image/png",
       "purpose": "maskable"
     }
+  ],
+  "shortcuts": [
+    { "name": "Aujourd’hui", "short_name": "Aujourd’hui", "url": "/now", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Agenda du parent", "short_name": "Agenda", "url": "/parent/agenda", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Boutique", "short_name": "Boutique", "url": "/shop", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Quiz", "short_name": "Quiz", "url": "/quiz", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
   ]
 }
