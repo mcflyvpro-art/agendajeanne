@@ -23,11 +23,13 @@ Next.js 15 · Supabase · Web Push (VAPID) · déploiement Vercel.
 ### 1. Base de données
 
 Dans **Supabase → SQL Editor**, colle et exécute `supabase/schema.sql`, puis les
-migrations `v2.sql` … `v7.sql` dans l'ordre, et enfin `realtime.sql`.
+migrations `v2.sql` … `v8.sql` dans l'ordre, et enfin `realtime.sql`.
 
-> `v7.sql` ajoute le réglage « travail sur téléphone », le propriétaire du
-> minuteur, la table `push_devices` (un appareil = un abonnement) et publie
-> toutes les tables en temps réel. Il est idempotent et ne supprime rien.
+> `v7.sql` ajoute le réglage « travail sur téléphone » et la table
+> `push_devices` (un appareil = un abonnement), puis publie toutes les tables en
+> temps réel. `v8.sql` installe l'horloge de présence décrite plus bas : la
+> table `task_presence` et les fonctions du chronomètre. Les deux sont
+> idempotents et ne suppriment rien.
 Le script est idempotent : tables, RLS, badges, matières, récompenses de départ
 et buckets de stockage. Les profils des comptes `jeanne@` et `virginie@` sont créés au passage.
 
@@ -110,28 +112,74 @@ Les notifications partent sur **tous** les appareils d'une personne (table
 `push_devices`) : avant, se connecter sur un deuxième appareil effaçait
 l'abonnement du premier.
 
-## Le minuteur, et quand il se met en pause
+## Le chronomètre : une horloge de présence
 
-C'est le point le plus subtil de l'app, alors il est explicite :
+C'est la pièce la plus délicate de l'app, alors la règle est unique et
+explicite :
 
-| Situation | Sortir de l'app |
+> **Le temps s'accumule tant qu'au moins un appareil est présent.
+> Il s'arrête dès qu'il n'y en a plus.**
+
+« Présent » ne veut pas dire la même chose partout, et c'est voulu :
+
+| Appareil | Présent tant que… |
 |---|---|
-| Téléphone, tâche normale | met le chrono **en pause** |
-| Ordinateur (Mac ou PC) | **ne met pas** en pause — changer de fenêtre fait partie du travail |
-| Tâche « 📱 travail sur téléphone » | **ne met pas** en pause, quel que soit l'appareil |
+| Ordinateur (Mac, PC) | l'app est **ouverte**, même en arrière-plan, même minimisée |
+| Téléphone | l'app est **affichée à l'écran** |
+| Tâche « 📱 travail sur téléphone » | toujours — le devoir se fait justement hors de l'app |
 
-Le réglage **« Travail sur téléphone »** se coche à la création de la tâche
-(*Agenda → la tâche → onglet Règles*). Il est fait pour les devoirs qui se font
-justement hors de l'agenda : manuel numérique, vidéo, application. Sans lui,
-l'enfant sort pour travailler, le temps ne compte plus, et le bouton
-« J'ai fini » ne se débloque jamais — elle reste bloquée.
+Chaque appareil présent laisse une ligne dans `task_presence` et bat toutes les
+quinze secondes. Ce battement est la seule preuve de présence : s'il cesse —
+fenêtre fermée, ordinateur éteint, coupure de courant — le segment en cours est
+refermé **rétroactivement au dernier battement**. Aucune heure fantôme ne peut
+donc être créditée, même si personne ne revient jamais.
 
-Quand la pause automatique ne s'applique pas, un bouton **Pause** explicite
-apparaît : s'arrêter reste possible, mais c'est un choix, plus un effet de bord.
+### Ce que ça donne, situation par situation
 
-Deux garde-fous : le minuteur appartient à l'appareil qui l'a lancé (le
-téléphone resté ouvert en poche ne met plus en pause le travail commencé sur le
-PC), et un segment laissé ouvert cesse de compter au-delà de trois heures.
+| Ce qu'elle fait | Ce qui se passe |
+|---|---|
+| Elle lance la tâche sur le PC | le chrono démarre |
+| Elle passe sur une autre fenêtre, l'app reste ouverte | **le temps continue** |
+| Elle change d'écran dans l'app (Boutique, Quiz) | le temps continue |
+| Elle ferme la fenêtre ou quitte l'app | le temps **s'arrête**, à la seconde |
+| Elle rouvre l'app — sur le PC ou sur le téléphone | le temps **repart tout seul**, total conservé |
+| Les deux appareils sont ouverts | un seul compteur, jamais le double |
+| Le téléphone s'en va, le PC reste ouvert | rien ne s'arrête, même pas une seconde |
+| Le PC s'éteint, le téléphone est ouvert | le téléphone reprend la main aussitôt |
+| Elle range son téléphone (tâche normale) | le temps s'arrête |
+| Elle quitte l'app (tâche « travail sur téléphone ») | le temps continue |
+| Elle appuie sur Pause | le temps s'arrête, et **aucun** appareil ne le relance tout seul |
+| L'ordinateur plante, ou le courant saute | le temps est figé au dernier battement (≤ 1 min de marge) |
+| Le réseau tombe pendant qu'elle travaille | les secondes sont rendues au retour, dans la limite du temps réellement écoulé |
+| Une tâche reste ouverte toute la nuit | plafonnée à 3 h (ou deux fois la durée prévue) |
+
+### Pourquoi c'est fiable
+
+- **Une seule horloge.** Toutes les transitions passent par des fonctions SQL
+  qui n'utilisent que `now()` côté serveur. Une pendule d'ordinateur mal réglée
+  ne fausse plus rien ; l'affichage se cale sur cette même horloge.
+- **Pas de course entre appareils.** Chaque transition prend un verrou sur la
+  ligne : deux appareils qui reprennent la main au même instant ne créditent
+  jamais deux fois.
+- **Le départ est annoncé.** À la fermeture de la fenêtre, une requête
+  `keepalive` part malgré la page qui meurt. Si elle n'arrive pas, le battement
+  de cœur fait le ménage.
+- **Le ménage tourne sans personne.** `/api/cron/tick` referme chaque minute les
+  segments abandonnés : le tableau de bord du parent reste juste même si plus
+  aucun appareil n'est allumé.
+- **Rien ne s'invente.** Le rattrapage après coupure est borné par le temps
+  réellement écoulé depuis le début du segment.
+
+Ces scénarios se rejouent en quelques secondes sur un PostgreSQL local :
+voir `supabase/tests/`.
+
+### Le réglage « travail sur téléphone »
+
+Il se coche à la création de la tâche (*Agenda → la tâche → onglet Règles*) et
+sert aux devoirs qui se font hors de l'agenda : manuel numérique, vidéo,
+application. Sans lui, l'enfant sort de l'app pour travailler, le temps ne
+compte plus, et le bouton « J'ai fini » ne se débloque jamais — elle reste
+bloquée. Un bouton **Pause** explicite reste toujours à sa disposition.
 
 Le type d'appareil est reconnu automatiquement, et reste modifiable à la main
 dans **Moi → Cet appareil** (côté parent : *Réglages → Objectif*).
@@ -155,8 +203,11 @@ src/
     NavShell.tsx  onglets en bas sur téléphone, colonne à gauche sur ordinateur
   lib/
     sync.ts      canal temps réel unique, reconnexion, présence
+    timer.ts     chronomètre : mêmes calculs que les fonctions SQL
+    clock.ts     horloge du serveur, pour ne dépendre d'aucune pendule locale
     device.ts    téléphone ou ordinateur — décide de la pause du minuteur
-    useTimer.ts  chronomètre horodaté, règles de pause
+    useTimer.ts     affichage du chronomètre
+    useTimerAgent.ts présence de l'appareil : battement, départ, reprise
     economy.ts   barème, bonus, niveaux, série, badges
     tone.ts      rédaction des notifications (4 tons × 8 moments)
     actions.ts   démarrage, validation, crédit, journée parfaite

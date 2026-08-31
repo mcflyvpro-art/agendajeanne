@@ -36,6 +36,12 @@ async function run(req: Request) {
   const s = settings as Settings | null;
   if (!s) return NextResponse.json({ error: 'settings introuvables' }, { status: 500 });
 
+  // Referme les chronomètres abandonnés — ordinateur éteint, app tuée, réseau
+  // coupé. Sans ça, le tableau de bord du parent afficherait un travail en
+  // cours qui n'existe plus.
+  const { data: swept } = await db.rpc('timer_sweep');
+  if (swept) log.push(`chronos refermés: ${swept}`);
+
   const all = (profiles ?? []) as Profile[];
   const child = all.find((p) => p.id === s.child_id) ?? all.find((p) => p.role === 'child');
   const parents = all.filter((p) => p.role === 'parent');

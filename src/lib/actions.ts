@@ -2,7 +2,7 @@
 import { supabase } from '@/lib/supabase';
 import { computeAward, dayIsComplete, badgesToUnlock, levelOf } from '@/lib/economy';
 import { todayISO, addDaysISO, toMinutes, nowMinutes, fromMinutes } from '@/lib/dates';
-import { deviceId, deviceKind, isDesktopDevice } from '@/lib/device';
+import { timerStart, timerFinalize } from '@/lib/timer';
 import { announceLocalChange } from '@/lib/sync';
 import type { Profile, Settings, Task } from '@/lib/types';
 
@@ -19,73 +19,18 @@ export async function notify(kind: string, payload: Record<string, unknown> = {}
 }
 
 /* ------------------------------------------------------------- minuteur -- */
-
 /**
- * Garde-fou : si personne ne revient jamais sur l'app (l'ordinateur reste
- * allumé toute la nuit avec une tâche en cours), le segment ouvert cesse de
- * compter au-delà de cette limite. Sans ça, une tâche de 45 min pourrait
- * afficher huit heures de travail.
+ * Le chronomètre vit dans `lib/timer.ts` et dans les fonctions SQL de `v8.sql`.
+ * On le réexporte ici : les écrans continuent d'appeler `A.startTask(...)` et
+ * `A.elapsedOf(...)` comme avant.
  */
-export function runawayCapSeconds(task: Task): number {
-  return Math.max(3 * 3600, task.duration_min * 60 * 2);
-}
-
-/** Secondes réellement travaillées : le segment en cours ne compte que s'il tourne. */
-export function elapsedOf(task: Task): number {
-  const base = task.active_seconds ?? 0;
-  if (!task.timer_running || !task.timer_segment_at) return base;
-  const open = Math.max(0, Math.floor((Date.now() - new Date(task.timer_segment_at).getTime()) / 1000));
-  return base + Math.min(open, runawayCapSeconds(task));
-}
-
-/**
- * Vrai si sortir de l'app doit mettre le minuteur en pause.
- *
- * Deux exceptions, et elles comptent :
- *  · sur un ordinateur, changer de fenêtre fait partie du travail (manuel en
- *    ligne, cahier, autre onglet) — le chrono continue ;
- *  · sur une tâche marquée « travail sur téléphone », le devoir se fait
- *    justement hors de l'app — sinon l'enfant reste bloquée, incapable de
- *    valider parce que le chrono ne tourne que quand elle regarde l'écran.
- */
-export function pausesWhenHidden(task: Task): boolean {
-  return !isDesktopDevice() && !task.work_on_phone;
-}
-
-/**
- * Le minuteur appartient à l'appareil qui l'a lancé. Sans ça, le téléphone
- * resté ouvert en poche mettrait en pause le travail commencé sur le PC.
- */
-export function ownsTimer(task: Task): boolean {
-  return !task.timer_device || task.timer_device === deviceId();
-}
+export {
+  elapsedOf, segmentSeconds, isTimerLive, isPresent, worksInBackground,
+  runawayCapSeconds, timerPause, timerResume, timerRelease, timerTouch, timerFinalize,
+} from '@/lib/timer';
 
 export async function startTask(task: Task) {
-  await supabase.from('tasks').update({
-    status: 'doing',
-    started_at: task.started_at ?? new Date().toISOString(),
-    timer_running: true,
-    timer_segment_at: new Date().toISOString(),
-    timer_device: deviceId(),
-    timer_device_kind: deviceKind(),
-  }).eq('id', task.id);
-  announceLocalChange(['tasks']);
-}
-
-/** Met le chrono en pause et fige le total. */
-export async function pauseTimer(taskId: string, seconds: number) {
-  await supabase.from('tasks').update({
-    timer_running: false, timer_segment_at: null, active_seconds: Math.round(seconds),
-  }).eq('id', taskId);
-  announceLocalChange(['tasks']);
-}
-
-export async function resumeTimer(taskId: string, seconds: number) {
-  await supabase.from('tasks').update({
-    timer_running: true, timer_segment_at: new Date().toISOString(), active_seconds: Math.round(seconds),
-    timer_device: deviceId(), timer_device_kind: deviceKind(),
-  }).eq('id', taskId);
-  announceLocalChange(['tasks']);
+  await timerStart(task.id);
 }
 
 export async function toggleSubtask(id: string, done: boolean) {
@@ -132,6 +77,11 @@ export async function completeTask(
   task: Task, s: Settings, child: Profile,
   opts: { proofUrl?: string | null; note?: string | null; needsValidation: boolean }
 ): Promise<AwardResult | null> {
+  // Le segment ouvert est refermé par le serveur : c'est lui qui sait combien
+  // de secondes créditer, et son horloge fait foi.
+  const finalized = await timerFinalize(task.id);
+  if (finalized) task = { ...task, ...finalized };
+
   const now = new Date();
   const base = {
     completed_at: now.toISOString(),

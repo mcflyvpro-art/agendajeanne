@@ -365,7 +365,7 @@ function Next({ task, onChanged }: { task: Task; onChanged: () => void }) {
 /* -------------------------------------------------------------- mode focus */
 function Focus({ task, onDone }: { task: Task; onDone: (a: A.AwardResult | null) => void }) {
   const { settings } = useApp();
-  const { seconds, running, pausesOnHide, paused, toggle } = useTaskTimer(task);
+  const { seconds, running, paused, background, otherDevice, pause, resume } = useTaskTimer(task);
   const [finish, setFinish] = useState(false);
   if (!settings) return null;
 
@@ -391,25 +391,30 @@ function Focus({ task, onDone }: { task: Task; onDone: (a: A.AwardResult | null)
           </Ring>
         </div>
 
-        {/* Un chrono qui continue hors de l'app a besoin d'une pause explicite :
-            sinon la seule façon de s'arrêter serait de ne pas s'arrêter. */}
-        {!pausesOnHide && (
-          <div className="mt-4 space-y-3">
-            <p className="rounded-3xl bg-leaf-light px-4 py-3 text-center text-sm font-extrabold text-leaf-dark">
-              {task.work_on_phone
-                ? '📱 Tu peux sortir de l’app pour travailler, le temps continue'
-                : '💻 Sur ordinateur, changer de fenêtre n’arrête pas le temps'}
-            </p>
-            <button onClick={toggle} className={clsx('w-full', paused ? 'btn-leaf' : 'btn-plain')}>
-              {paused ? '▶️ Reprendre' : '⏸️ Mettre en pause'}
-            </button>
-          </div>
+        {/* Ce que fait le temps quand elle s'en va : dit noir sur blanc, pour
+            qu'elle n'ait jamais à le deviner. */}
+        {background && !paused && (
+          <p className="mt-4 rounded-3xl bg-leaf-light px-4 py-3 text-center text-sm font-extrabold text-leaf-dark">
+            {task.work_on_phone
+              ? '📱 Tu peux sortir de l’app pour travailler, le temps continue'
+              : '💻 Le temps continue tant que l’app reste ouverte — si tu la fermes, il s’arrête'}
+          </p>
         )}
 
-        {pausesOnHide && !running && (
-          <p className="mt-4 rounded-3xl bg-sun-light px-4 py-3 text-center font-extrabold text-ink">
-            👀 Reviens sur l’app pour repartir
+        {otherDevice && (
+          <p className="mt-4 rounded-3xl bg-grape-light px-4 py-3 text-center text-sm font-extrabold text-grape">
+            🔗 Le chrono tourne sur ton autre appareil
           </p>
+        )}
+
+        {paused ? (
+          <button onClick={resume} className="btn-leaf btn-lg mt-4 w-full">▶️ Reprendre</button>
+        ) : running ? (
+          <button onClick={pause} className="btn-plain mt-4 w-full">⏸️ Mettre en pause</button>
+        ) : (
+          <button onClick={resume} className="btn-sun btn-lg mt-4 w-full">
+            {background ? '▶️ Relancer le chrono' : '👀 Reviens sur l’app — relancer'}
+          </button>
         )}
 
         {!!task.subtasks?.length && (

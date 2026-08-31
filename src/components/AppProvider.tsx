@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import { startSync, stopSync, subscribeTables, resync } from '@/lib/sync';
+import { syncClock } from '@/lib/clock';
 import { isDesktopDevice } from '@/lib/device';
 import type { Profile, Settings, Subject } from '@/lib/types';
 
@@ -125,6 +126,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!profile) return;
     startSync({ id: profile.id, role: profile.role, name: profile.display_name });
+    // Le chronomètre se lit sur l'horloge du serveur : on mesure l'écart avec
+    // celle de la machine avant d'afficher la moindre seconde.
+    syncClock();
   }, [profile?.id, profile?.role, profile?.display_name]);
 
   useEffect(() => {
@@ -145,7 +149,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (document.visibilityState !== 'visible') return;
       const { data } = await supabase.auth.getSession();
       if (data.session) setSession(data.session);
-      await loadAll(uid);
+      await Promise.all([loadAll(uid), syncClock()]);
       resync();
     };
     document.addEventListener('visibilitychange', wake);

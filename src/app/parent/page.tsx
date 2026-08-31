@@ -10,7 +10,7 @@ import { useDay } from '@/lib/useDay';
 import { useLive } from '@/lib/useLive';
 import { todayISO, hhmm, nowMinutes, toMinutes, longDate } from '@/lib/dates';
 import { progressOf, computeAward, levelOf, xpToday } from '@/lib/economy';
-import { settleDay, adjustBalance, elapsedOf, notify } from '@/lib/actions';
+import { settleDay, adjustBalance, elapsedOf, isTimerLive, notify } from '@/lib/actions';
 import { KUDOS } from '@/lib/tone';
 import { moodEmoji } from '@/lib/mood';
 import { reactionEmoji } from '@/lib/reactions';
@@ -243,21 +243,27 @@ function Presence({ doing }: { doing?: Task }) {
   const sec = elapsedOf(doing);
   const mm = String(Math.floor(sec / 60)).padStart(2, '0');
   const ss = String(sec % 60).padStart(2, '0');
-  const running = doing.timer_running;
+  const live = isTimerLive(doing) && !doing.timer_paused;
   const onComputer = doing.timer_device_kind === 'desktop';
 
-  // « A quitté l'app » n'est vrai que là où quitter l'app arrête le chrono :
-  // sur ordinateur, ou pour un devoir qui se fait sur le téléphone, la pause
-  // est toujours un choix délibéré.
-  const pausedLabel = onComputer || doing.work_on_phone ? 'En pause' : 'En pause — a quitté l’app';
+  // Trois arrêts différents, trois phrases différentes : le parent doit savoir
+  // s'il s'agit d'une pause assumée, d'un départ de l'app, ou d'un appareil
+  // qui ne répond plus.
+  const stopped = doing.timer_paused
+    ? 'En pause — elle a appuyé sur pause'
+    : doing.work_on_phone
+      ? 'Arrêtée'
+      : onComputer
+        ? 'Arrêtée — app fermée sur l’ordinateur'
+        : 'En pause — a quitté l’app';
 
   return (
-    <section className={clsx('card border-2 p-4', running ? 'border-leaf bg-leaf-light' : 'border-sun bg-sun-light')}>
+    <section className={clsx('card border-2 p-4', live ? 'border-leaf bg-leaf-light' : 'border-sun bg-sun-light')}>
       <div className="flex items-center gap-3">
-        <span className="text-3xl">{running ? '▶️' : '⏸️'}</span>
+        <span className="text-3xl">{live ? '▶️' : '⏸️'}</span>
         <div className="min-w-0 flex-1">
-          <p className={clsx('text-sm font-black', running ? 'text-leaf-dark' : 'text-sun-dark')}>
-            {running ? 'Travaille en ce moment' : pausedLabel}
+          <p className={clsx('text-sm font-black', live ? 'text-leaf-dark' : 'text-sun-dark')}>
+            {live ? 'Travaille en ce moment' : stopped}
           </p>
           <p className="truncate font-extrabold text-ink">{doing.title}</p>
           <p className="mt-0.5 text-xs font-bold text-muted">

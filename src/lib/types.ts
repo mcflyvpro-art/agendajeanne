@@ -114,6 +114,10 @@ export interface Task {
   parent_alerted: boolean;
   timer_running: boolean;
   timer_segment_at: string | null;
+  /** Dernier signe de vie de l'appareil qui travaille : c'est lui qui prouve la présence. */
+  timer_heartbeat_at: string | null;
+  /** Pause volontaire : seule chose qui empêche un autre appareil de relancer. */
+  timer_paused: boolean;
   /** Appareil qui pilote le minuteur, pour qu'un autre ne le mette pas en pause. */
   timer_device: string | null;
   timer_device_kind: 'desktop' | 'mobile' | null;
