@@ -6,6 +6,9 @@ import { startSync, stopSync, subscribeTables, resync } from '@/lib/sync';
 import { syncClock } from '@/lib/clock';
 import { isDesktopDevice } from '@/lib/device';
 import type { Profile, Settings, Subject } from '@/lib/types';
+import ObserverBar from '@/components/ObserverBar';
+
+export type ObserveAs = 'parent' | 'child' | null;
 
 interface Ctx {
   session: Session | null;
@@ -17,7 +20,14 @@ interface Ctx {
   ready: boolean;
   loadError: string | null;
   isParent: boolean;
+  /** Vrai compte connecté = observateur (que la vue affichée soit parent, enfant, ou aucune). */
   isAdmin: boolean;
+  /** Un observateur regarde actuellement une des deux interfaces. */
+  isObserving: boolean;
+  observeAs: ObserveAs;
+  parents: Profile[];
+  startObserving: (as: 'parent' | 'child') => void;
+  stopObserving: () => void;
   refresh: () => Promise<void>;
   refreshChild: () => Promise<void>;
   signOut: () => Promise<void>;
@@ -33,14 +43,24 @@ export const useApp = () => useContext(AppCtx);
  */
 const PARENT_IDLE_MS = () => (isDesktopDevice() ? 60 * 60 * 1000 : 5 * 60 * 1000);
 
+const OBSERVE_KEY = 'agenda-observe-as';
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  /** Le compte réellement connecté — jamais modifié par le mode observateur. */
+  const [realProfile, setRealProfile] = useState<Profile | null>(null);
   const [child, setChild] = useState<Profile | null>(null);
+  const [parents, setParents] = useState<Profile[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [observeAs, setObserveAs] = useState<ObserveAs>(null);
+
+  useEffect(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem(OBSERVE_KEY) : null;
+    if (v === 'parent' || v === 'child') setObserveAs(v);
+  }, []);
 
   const loadAll = useCallback(async (uid: string) => {
     try {
@@ -57,7 +77,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (!p.data) { setLoadError('Aucun profil associé à ce compte.'); return; }
 
       setLoadError(null);
-      setProfile(p.data as Profile);
+      setRealProfile(p.data as Profile);
       setSettings((s.data as Settings) ?? null);
       setSubjects((subj.data as Subject[]) ?? []);
 
@@ -71,6 +91,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           : await supabase.from('profiles').select('*').eq('role', 'child').limit(1).maybeSingle();
         setChild((c.data as Profile) ?? null);
       }
+      // Le compte observateur a besoin de savoir qui est « le » parent à
+      // regarder — inutile de le demander pour un compte parent ou enfant.
+      if (me.role === 'admin') {
+        const { data: ps } = await supabase.from('profiles').select('*').eq('role', 'parent').order('display_name');
+        setParents((ps as Profile[]) ?? []);
+      }
     } catch (e: any) {
       setLoadError(e?.message ?? 'Connexion impossible');
     }
@@ -83,11 +109,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const refreshChild = useCallback(async () => {
     if (!child) return;
     const c = await supabase.from('profiles').select('*').eq('id', child.id).maybeSingle();
-    if (c.data) {
-      setChild(c.data as Profile);
-      setProfile((p) => (p && p.id === c.data!.id ? (c.data as Profile) : p));
-    }
+    if (c.data) setChild(c.data as Profile);
   }, [child?.id]);
+
+  /**
+   * Ce que chaque écran voit sous `profile`.
+   *
+   * Pour un vrai compte parent ou enfant, c'est simplement son propre profil.
+   * Pour le compte observateur, c'est le profil du parent ou de l'enfant
+   * qu'il a choisi de regarder — c'est ce qui permet de rouvrir *les mêmes
+   * pages* (`/parent`, `/now`…) sans qu'elles sachent qu'un observateur les
+   * affiche. Rien d'autre ne change : la session réelle (`session.user.id`),
+   * celle que la base vérifie pour toute écriture, reste celle de
+   * l'observateur du début à la fin.
+   */
+  const observedParent = parents[0] ?? null;
+  const profile: Profile | null = !realProfile ? null
+    : realProfile.role !== 'admin' ? realProfile
+    : observeAs === 'child' ? child
+    : observeAs === 'parent' ? observedParent
+    : realProfile;
+
+  const startObserving = useCallback((as: 'parent' | 'child') => {
+    setObserveAs(as);
+    try { localStorage.setItem(OBSERVE_KEY, as); } catch { /* stockage indisponible : sans gravité */ }
+  }, []);
+  const stopObserving = useCallback(() => {
+    setObserveAs(null);
+    try { localStorage.removeItem(OBSERVE_KEY); } catch { /* stockage indisponible : sans gravité */ }
+  }, []);
 
   /**
    * Amorçage. `ready` ne passe à vrai qu'une fois le profil résolu : sans ça,
@@ -111,7 +161,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setReady(false);
       setSession(s);
       if (s?.user?.id) await loadAll(s.user.id);
-      else { setProfile(null); setChild(null); setLoadError(null); }
+      else { setRealProfile(null); setChild(null); setParents([]); setLoadError(null); }
       if (alive) setReady(true);
     });
 
@@ -125,12 +175,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
    * qu'un autre appareil les modifie — Mac, PC ou téléphone.
    */
   useEffect(() => {
-    if (!profile) return;
-    startSync({ id: profile.id, role: profile.role, name: profile.display_name });
+    if (!realProfile) return;
+    // Toujours l'identité réelle, jamais celle observée : sans ça, un
+    // observateur qui regarde l'interface enfant se ferait passer, dans la
+    // présence temps réel, pour un deuxième appareil de l'enfant — visible
+    // par le parent et par l'enfant, ce que le mode observateur doit
+    // justement éviter.
+    startSync({ id: realProfile.id, role: realProfile.role, name: realProfile.display_name });
     // Le chronomètre se lit sur l'horloge du serveur : on mesure l'écart avec
     // celle de la machine avant d'afficher la moindre seconde.
     syncClock();
-  }, [profile?.id, profile?.role, profile?.display_name]);
+  }, [realProfile?.id, realProfile?.role, realProfile?.display_name]);
 
   useEffect(() => {
     const uid = session?.user?.id;
@@ -175,7 +230,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
    */
   const hiddenAt = useRef<number | null>(null);
   useEffect(() => {
-    if (!ready || profile?.role !== 'parent') return;
+    // Sur le vrai rôle, jamais sur celui observé : l'observateur qui regarde
+    // l'interface parent ne doit jamais être déconnecté pour autant — c'est
+    // justement le compte qui ne se ferme jamais tout seul.
+    if (!ready || realProfile?.role !== 'parent') return;
     const onChange = () => {
       if (document.visibilityState === 'hidden') {
         hiddenAt.current = Date.now();
@@ -188,7 +246,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
     document.addEventListener('visibilitychange', onChange);
     return () => document.removeEventListener('visibilitychange', onChange);
-  }, [ready, profile?.role]);
+  }, [ready, realProfile?.role]);
 
   const signOut = useCallback(async () => {
     stopSync();
@@ -196,13 +254,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     location.href = '/login';
   }, []);
 
+  const isAdmin = realProfile?.role === 'admin';
+
   return (
     <AppCtx.Provider value={{
       session, profile, child, settings, subjects, ready, loadError,
-      isParent: profile?.role === 'parent', isAdmin: profile?.role === 'admin',
+      isParent: profile?.role === 'parent',
+      isAdmin,
+      isObserving: isAdmin && observeAs !== null,
+      observeAs, parents,
+      startObserving, stopObserving,
       refresh, refreshChild, signOut,
     }}>
       {children}
+      {isAdmin && <ObserverBar profile={profile} observeAs={observeAs} startObserving={startObserving} stopObserving={stopObserving} />}
     </AppCtx.Provider>
   );
 }

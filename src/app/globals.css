@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: light; }
+:root { color-scheme: light; --tabbar-height: 0px; }
 
 html, body {
   background: #FAF7FF;

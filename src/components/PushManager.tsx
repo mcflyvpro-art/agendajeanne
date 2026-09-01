@@ -41,7 +41,7 @@ async function saveSubscription(profileId: string, sub: PushSubscription) {
 }
 
 export default function PushManager() {
-  const { profile, refresh } = useApp();
+  const { profile, refresh, isObserving } = useApp();
   const [state, setState] = useState<'unknown' | 'ok' | 'need-install' | 'need-permission' | 'denied'>('unknown');
   const [busy, setBusy] = useState(false);
 
@@ -101,7 +101,10 @@ export default function PushManager() {
     } finally { setBusy(false); }
   };
 
-  if (state === 'ok' || state === 'unknown') return null;
+  // Un observateur regarde le profil de quelqu'un d'autre : lui proposer
+  // d'activer SES notifications n'aurait aucun sens, et la moindre écriture
+  // qui en découlerait serait de toute façon ignorée par la base.
+  if (isObserving || state === 'ok' || state === 'unknown') return null;
 
   return (
     <div className="card border-2 border-sun bg-sun-light p-4">

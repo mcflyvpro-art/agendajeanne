@@ -9,6 +9,9 @@ export const maxDuration = 60;
 export async function POST(req: Request) {
   const me = await whoami(req);
   if (!me) return NextResponse.json({ error: 'non authentifié' }, { status: 401 });
+  // Un compte observateur ne doit déclencher aucun appel réel — ni écriture,
+  // ni dépense d'API — même en cliquant sur les vrais boutons des vraies pages.
+  if (me.role === 'admin') return NextResponse.json({ error: 'Mode observateur : lecture seule' }, { status: 403 });
 
   const { image, mime, hint, questions, choices } = await req.json().catch(() => ({}) as any);
   if (!image) return NextResponse.json({ error: 'image manquante' }, { status: 400 });

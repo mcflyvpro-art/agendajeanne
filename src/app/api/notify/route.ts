@@ -59,6 +59,12 @@ function fromParent(kind: string, b: any): { copy: Copy; pref: string } | null {
 export async function POST(req: Request) {
   const me = await whoami(req);
   if (!me) return NextResponse.json({ error: 'non authentifié' }, { status: 401 });
+  // Cette route écrit via le rôle de service (elle contourne les policies de
+  // la base) : contrairement aux écritures normales, un compte observateur
+  // ne serait pas bloqué ici tout seul. On le bloque donc explicitement —
+  // sinon regarder l'interface enfant pourrait envoyer un vrai kudos au vrai
+  // parent.
+  if (me.role === 'admin') return NextResponse.json({ ok: true, sent: 0, skipped: 'observateur' });
 
   const body = await req.json().catch(() => ({} as any));
   const db = admin();

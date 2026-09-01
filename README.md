@@ -23,14 +23,15 @@ Next.js 15 · Supabase · Web Push (VAPID) · déploiement Vercel.
 ### 1. Base de données
 
 Dans **Supabase → SQL Editor**, colle et exécute `supabase/schema.sql`, puis les
-migrations `v2.sql` … `v9.sql` dans l'ordre, et enfin `realtime.sql`.
+migrations `v2.sql` … `v10.sql` dans l'ordre, et enfin `realtime.sql`.
 
 > `v7.sql` ajoute le réglage « travail sur téléphone » et la table
 > `push_devices` (un appareil = un abonnement), puis publie toutes les tables en
 > temps réel. `v8.sql` installe l'horloge de présence décrite plus bas : la
 > table `task_presence` et les fonctions du chronomètre. `v9.sql` ajoute le
-> rôle `admin` (compte observateur, lecture seule). Tous sont idempotents et
-> ne suppriment rien.
+> rôle `admin` (compte observateur, lecture seule). `v10.sql` referme un
+> angle mort : les policies de stockage n'imposaient encore aucun rôle. Tous
+> sont idempotents et ne suppriment rien.
 Le script est idempotent : tables, RLS, badges, matières, récompenses de départ
 et buckets de stockage. Les profils des comptes `jeanne@` et `virginie@` sont créés au passage.
 
@@ -116,9 +117,11 @@ l'abonnement du premier.
 ## Le compte observateur
 
 Un troisième rôle, `admin`, pensé pour toi : un compte qui se connecte, ne se
-déconnecte jamais tout seul, et affiche en un coup d'œil ce qui se passe côté
-parent **et** côté enfant — sans jamais pouvoir rien changer. Pas besoin de te
-connecter avec leurs comptes pour observer.
+déconnecte jamais tout seul, et ouvre **les vraies interfaces** — les mêmes
+pages que le parent et l'enfant utilisent chaque jour, avec les mêmes données
+en direct — en pur regard : rien de ce qui s'y clique ne s'enregistre jamais.
+Pas de tableau de bord à part, pas de résumé : c'est littéralement l'écran du
+parent, ou l'écran de l'enfant, tel quel.
 
 ### Créer le compte
 
@@ -130,31 +133,57 @@ connecter avec leurs comptes pour observer.
    select create_observer_account('ton-email@example.com');
    ```
    La fonction vient de `v9.sql` ; rejouer ne fait rien si le compte existe déjà.
-3. Connecte-toi sur `/login` avec cet e-mail : tu arrives directement sur
-   `/admin`.
+3. Connecte-toi sur `/login` avec cet e-mail : tu arrives sur `/admin`, un
+   choix entre les deux interfaces.
 
-### Ce que la page affiche
+### Comment ça marche
 
-- **Connectés maintenant** — quels appareils sont ouverts côté parent et côté
-  enfant, en direct.
-- **En ce moment** — la tâche en cours de l'enfant, son chronomètre, si le
-  travail continue ou s'est arrêté, et sur quel type d'appareil.
-- **Journée** — les tâches du jour et leur état.
-- **Économie** — solde, XP, série, niveau.
-- **Fil d'activité** — messages, mouvements du solde, demandes de récompense,
-  humeurs partagées, le tout mêlé et attribué à la bonne personne.
+`/admin` propose deux portes : **Interface Parent** et **Interface Enfant**.
+En choisir une ouvre la vraie page (`/parent` ou `/now`) — navigation, onglets,
+feuilles modales, tout fonctionne comme pour de vrai, parce que ce sont
+exactement les mêmes composants. Un bandeau reste ancré en bas de l'écran,
+au-dessus de la barre d'onglets, pour basculer d'une interface à l'autre à
+tout moment, ou quitter :
 
-### Pourquoi il ne peut rien casser
+```
+🔭 Vue parent — Maman     👨‍👩 Parent   👧 Enfant   Quitter
+```
 
-Ce n'est pas qu'une discipline d'écriture de la page : la base de données
-l'impose. Toute politique d'écriture (`p_parent_all`) est conditionnée à
-`is_parent()`, qui ne vaut que pour le rôle `parent` — jamais pour `admin`.
-Même une page mal écrite ne pourrait rien modifier ; le compte observateur
-n'a que le droit de lecture ouvert à tout compte connecté.
+Ce que tu vois est déterminé par ce que la vraie personne (le parent, ou
+l'enfant) verrait à cet instant : son solde, sa journée, ses messages, le
+chronomètre en cours — en direct, via la même synchronisation temps réel que
+les autres appareils.
+
+### Pourquoi rien ne peut jamais être modifié
+
+Ce n'est pas une discipline de l'interface, c'est une garantie de la base de
+données — l'interface peut se tromper, la base ne peut pas :
+
+- **Toutes les tables.** Chaque politique d'écriture (`p_parent_all`) est
+  conditionnée à `is_parent()`, qui ne reconnaît que le rôle `parent`. Le
+  compte observateur reste `admin` en base quoi qu'affiche l'écran — cliquer
+  sur « Enregistrer », « Valider » ou « Supprimer » revient toujours à
+  écrire *en tant qu'observateur*, et la base l'ignore.
+- **Le stockage aussi** (`v10.sql`) — les photos de preuve et pièces jointes
+  suivent la même règle ; avant ce correctif, n'importe quel compte connecté
+  pouvait y déposer un fichier.
+- **Les routes serveur qui déclenchent de vrais effets** (notifications push,
+  génération par IA) refusent explicitement le rôle `admin`, parce qu'elles
+  utilisent une clé de service qui contourne ces politiques — sans ce refus
+  explicite, regarder l'interface enfant aurait pu envoyer un vrai message au
+  vrai parent.
+- **Le chronomètre.** Le simple fait d'observer l'interface enfant n'envoie
+  jamais de battement de présence pour la tâche en cours : sans cette
+  précaution, le navigateur de l'observateur aurait pu faire croire au
+  serveur que l'enfant travaille encore après avoir réellement fermé l'app.
+
+Testé : `insert into storage.objects` réussit avec l'identité de l'enfant,
+échoue avec celle de l'observateur (`supabase/tests/`, section stockage).
 
 Il se rend aussi invisible : contrairement au parent et à l'enfant, il ne
-s'annonce pas dans la présence en temps réel — le parent et l'enfant ne
-voient jamais qu'un observateur regarde.
+s'annonce jamais dans la présence en temps réel — ni sa propre présence, ni
+(en observant) celle de l'enfant. Le parent et l'enfant ne voient jamais
+qu'un observateur regarde.
 
 ### Une limite honnête
 
@@ -163,7 +192,8 @@ voient jamais qu'un observateur regarde.
 session de lui-même — contrairement au compte parent, dont l'inactivité
 prolongée coupe la session — mais si Supabase révoque les jetons inactifs
 depuis longtemps, une reconnexion occasionnelle reste possible. Ouvrir l'app
-de temps en temps suffit à l'éviter.
+de temps en temps suffit à l'éviter. Autre limite : s'il existe plusieurs
+comptes parents, l'observateur ne voit que le premier (par ordre alphabétique).
 
 ## Le chronomètre : une horloge de présence
 

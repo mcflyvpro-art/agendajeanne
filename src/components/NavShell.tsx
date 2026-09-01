@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { useApp } from '@/components/AppProvider';
 import { Loader, Toaster } from '@/components/ui';
@@ -36,7 +36,7 @@ export default function NavShell({ role, tabs, children }: {
   tabs: readonly NavTab[];
   children: React.ReactNode;
 }) {
-  const { session, profile, ready, loadError } = useApp();
+  const { session, profile, ready, loadError, isObserving } = useApp();
   const path = usePathname();
   const router = useRouter();
   const device = useDevice();
@@ -108,34 +108,61 @@ export default function NavShell({ role, tabs, children }: {
         <Toaster />
         <Sidebar tabs={tabs} isActive={isActive} mac={device.mac} />
         <div className="pl-[268px]">
-          <div className="pb-16">{children}</div>
+          <div className={isObserving ? 'pb-24' : 'pb-16'}>{children}</div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-dvh pb-28" onTouchStart={swipe.onTouchStart} onTouchEnd={swipe.onTouchEnd}>
+    <div className={clsx('min-h-dvh', isObserving ? 'pb-40' : 'pb-28')}
+         onTouchStart={swipe.onTouchStart} onTouchEnd={swipe.onTouchEnd}>
       <Toaster />
       {children}
-      <nav className="tabbar fixed inset-x-0 bottom-0 z-40">
-        <div className="mx-auto flex max-w-lg px-2 pt-2">
-          {tabs.map(({ href, label, short, emoji, Icon }) => {
-            const active = isActive(href);
-            return (
-              <Link key={href} href={href}
-                    className={clsx('flex flex-1 flex-col items-center gap-1 rounded-2xl py-2 no-select transition',
-                      active ? 'bg-grape-light text-grape' : 'text-muted')}>
-                {Icon
-                  ? <Icon size={21} strokeWidth={active ? 2.6 : 2} />
-                  : <span className={clsx('text-2xl transition', active && 'scale-110')}>{emoji}</span>}
-                <span className="text-[10px] font-extrabold">{short ?? label}</span>
-              </Link>
-            );
-          })}
-        </div>
-      </nav>
+      <TabBar tabs={tabs} isActive={isActive} />
     </div>
+  );
+}
+
+/**
+ * Barre d'onglets du téléphone. Mesurée en direct : le bandeau du compte
+ * observateur (`ObserverBar`) s'empile juste au-dessus grâce à cette mesure,
+ * au lieu de recouvrir les onglets et de rendre la navigation impossible.
+ */
+function TabBar({ tabs, isActive }: { tabs: readonly NavTab[]; isActive: (href: string) => boolean }) {
+  const ref = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const set = () => document.documentElement.style.setProperty('--tabbar-height', `${el.offsetHeight}px`);
+    set();
+    const ro = new ResizeObserver(set);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      document.documentElement.style.setProperty('--tabbar-height', '0px');
+    };
+  }, []);
+
+  return (
+    <nav ref={ref} className="tabbar fixed inset-x-0 bottom-0 z-40">
+      <div className="mx-auto flex max-w-lg px-2 pt-2">
+        {tabs.map(({ href, label, short, emoji, Icon }) => {
+          const active = isActive(href);
+          return (
+            <Link key={href} href={href}
+                  className={clsx('flex flex-1 flex-col items-center gap-1 rounded-2xl py-2 no-select transition',
+                    active ? 'bg-grape-light text-grape' : 'text-muted')}>
+              {Icon
+                ? <Icon size={21} strokeWidth={active ? 2.6 : 2} />
+                : <span className={clsx('text-2xl transition', active && 'scale-110')}>{emoji}</span>}
+              <span className="text-[10px] font-extrabold">{short ?? label}</span>
+            </Link>
+          );
+        })}
+      </div>
+    </nav>
   );
 }
 
