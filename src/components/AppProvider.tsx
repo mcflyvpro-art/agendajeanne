@@ -17,6 +17,7 @@ interface Ctx {
   ready: boolean;
   loadError: string | null;
   isParent: boolean;
+  isAdmin: boolean;
   refresh: () => Promise<void>;
   refreshChild: () => Promise<void>;
   signOut: () => Promise<void>;
@@ -198,7 +199,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   return (
     <AppCtx.Provider value={{
       session, profile, child, settings, subjects, ready, loadError,
-      isParent: profile?.role === 'parent', refresh, refreshChild, signOut,
+      isParent: profile?.role === 'parent', isAdmin: profile?.role === 'admin',
+      refresh, refreshChild, signOut,
     }}>
       {children}
     </AppCtx.Provider>

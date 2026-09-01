@@ -23,13 +23,14 @@ Next.js 15 · Supabase · Web Push (VAPID) · déploiement Vercel.
 ### 1. Base de données
 
 Dans **Supabase → SQL Editor**, colle et exécute `supabase/schema.sql`, puis les
-migrations `v2.sql` … `v8.sql` dans l'ordre, et enfin `realtime.sql`.
+migrations `v2.sql` … `v9.sql` dans l'ordre, et enfin `realtime.sql`.
 
 > `v7.sql` ajoute le réglage « travail sur téléphone » et la table
 > `push_devices` (un appareil = un abonnement), puis publie toutes les tables en
 > temps réel. `v8.sql` installe l'horloge de présence décrite plus bas : la
-> table `task_presence` et les fonctions du chronomètre. Les deux sont
-> idempotents et ne suppriment rien.
+> table `task_presence` et les fonctions du chronomètre. `v9.sql` ajoute le
+> rôle `admin` (compte observateur, lecture seule). Tous sont idempotents et
+> ne suppriment rien.
 Le script est idempotent : tables, RLS, badges, matières, récompenses de départ
 et buckets de stockage. Les profils des comptes `jeanne@` et `virginie@` sont créés au passage.
 
@@ -111,6 +112,58 @@ Un seul canal temps réel pour toute l'app (`src/lib/sync.ts`) :
 Les notifications partent sur **tous** les appareils d'une personne (table
 `push_devices`) : avant, se connecter sur un deuxième appareil effaçait
 l'abonnement du premier.
+
+## Le compte observateur
+
+Un troisième rôle, `admin`, pensé pour toi : un compte qui se connecte, ne se
+déconnecte jamais tout seul, et affiche en un coup d'œil ce qui se passe côté
+parent **et** côté enfant — sans jamais pouvoir rien changer. Pas besoin de te
+connecter avec leurs comptes pour observer.
+
+### Créer le compte
+
+1. Dans **Supabase → Authentication → Add user**, crée un compte avec
+   n'importe quel e-mail et mot de passe (c'est celui-là que tu utiliseras sur
+   `/login`).
+2. Dans **SQL Editor**, exécute :
+   ```sql
+   select create_observer_account('ton-email@example.com');
+   ```
+   La fonction vient de `v9.sql` ; rejouer ne fait rien si le compte existe déjà.
+3. Connecte-toi sur `/login` avec cet e-mail : tu arrives directement sur
+   `/admin`.
+
+### Ce que la page affiche
+
+- **Connectés maintenant** — quels appareils sont ouverts côté parent et côté
+  enfant, en direct.
+- **En ce moment** — la tâche en cours de l'enfant, son chronomètre, si le
+  travail continue ou s'est arrêté, et sur quel type d'appareil.
+- **Journée** — les tâches du jour et leur état.
+- **Économie** — solde, XP, série, niveau.
+- **Fil d'activité** — messages, mouvements du solde, demandes de récompense,
+  humeurs partagées, le tout mêlé et attribué à la bonne personne.
+
+### Pourquoi il ne peut rien casser
+
+Ce n'est pas qu'une discipline d'écriture de la page : la base de données
+l'impose. Toute politique d'écriture (`p_parent_all`) est conditionnée à
+`is_parent()`, qui ne vaut que pour le rôle `parent` — jamais pour `admin`.
+Même une page mal écrite ne pourrait rien modifier ; le compte observateur
+n'a que le droit de lecture ouvert à tout compte connecté.
+
+Il se rend aussi invisible : contrairement au parent et à l'enfant, il ne
+s'annonce pas dans la présence en temps réel — le parent et l'enfant ne
+voient jamais qu'un observateur regarde.
+
+### Une limite honnête
+
+« Ne jamais être déconnecté » dépend aussi des réglages de Supabase Auth
+(durée de vie du jeton de rafraîchissement). Le code ne ferme jamais la
+session de lui-même — contrairement au compte parent, dont l'inactivité
+prolongée coupe la session — mais si Supabase révoque les jetons inactifs
+depuis longtemps, une reconnexion occasionnelle reste possible. Ouvrir l'app
+de temps en temps suffit à l'éviter.
 
 ## Le chronomètre : une horloge de présence
 

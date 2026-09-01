@@ -1,4 +1,9 @@
-export type Role = 'parent' | 'child';
+/**
+ * `admin` est un compte observateur, à toi seul : il lit tout, écrit sur
+ * rien. Aucune politique de base ne lui donne les droits d'écriture du
+ * parent — retirer un accès qu'il n'a jamais eu n'est donc jamais un risque.
+ */
+export type Role = 'parent' | 'child' | 'admin';
 export type TaskStatus = 'todo' | 'doing' | 'submitted' | 'done' | 'skipped' | 'missed';
 export type Tone = 'doux' | 'neutre' | 'ferme' | 'humour';
 

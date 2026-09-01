@@ -16,6 +16,7 @@ export default function Home() {
     if (!session) router.replace('/login');
     else if (profile?.role === 'parent') router.replace('/parent');
     else if (profile?.role === 'child') router.replace('/now');
+    else if (profile?.role === 'admin') router.replace('/admin');
   }, [session, profile, ready, loadError, router]);
 
   if (loadError) return <LoadFailure message={loadError} />;

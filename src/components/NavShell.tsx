@@ -53,7 +53,10 @@ export default function NavShell({ role, tabs, children }: {
   useEffect(() => {
     if (!ready || loadError) return;
     if (!session) router.replace('/login');
-    else if (profile && profile.role !== role) router.replace(profile.role === 'parent' ? '/parent' : '/now');
+    else if (profile && profile.role !== role) {
+      const home = profile.role === 'parent' ? '/parent' : profile.role === 'admin' ? '/admin' : '/now';
+      router.replace(home);
+    }
   }, [session, profile, ready, loadError, role, router]);
 
   // Barre latérale seulement quand la fenêtre est assez large : une PWA Mac

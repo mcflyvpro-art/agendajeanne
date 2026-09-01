@@ -191,7 +191,10 @@ function connectPresence() {
   ch.on('presence', { event: 'sync' }, read);
   ch.on('presence', { event: 'join' }, read);
   ch.on('presence', { event: 'leave' }, read);
-  ch.subscribe((status) => { if (status === 'SUBSCRIBED') ch.track(me); });
+  // Le compte observateur lit la présence de tout le monde, mais ne s'y
+  // annonce jamais : il regarde sans se faire voir, et sans jamais influencer
+  // ce que le parent ou l'enfant voient sur leur propre écran.
+  ch.subscribe((status) => { if (status === 'SUBSCRIBED' && identity?.role !== 'admin') ch.track(me); });
   presence = ch;
 }
 
@@ -275,4 +278,15 @@ export function usePresence(): PresenceEntry[] {
   }, []);
   const self = typeof window === 'undefined' ? '' : deviceId();
   return useMemo(() => list.filter((p) => p.device !== self), [list, self]);
+}
+
+/** Tous les appareils connectés, y compris le sien — vue observateur. */
+export function useAllPresence(): PresenceEntry[] {
+  const [list, setList] = useState<PresenceEntry[]>(presenceList);
+  useEffect(() => {
+    setList(presenceList);
+    presenceWatchers.add(setList);
+    return () => { presenceWatchers.delete(setList); };
+  }, []);
+  return list;
 }
