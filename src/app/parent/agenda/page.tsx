@@ -11,7 +11,8 @@ import { todayISO, addDaysISO, weekStart, dayShort, dowOf, hhmm, longDate, human
 import { suggestCoins } from '@/lib/economy';
 import { notify } from '@/lib/actions';
 import Help from '@/components/Help';
-import { Loader, Sheet, Empty, SegmentedTabs, NumberField, toast } from '@/components/ui';
+import { Loader, Sheet, Empty, SegmentedTabs, NumberField, PageHeader, toast } from '@/components/ui';
+import WeekStrip from '@/components/WeekStrip';
 import type { Task, Routine } from '@/lib/types';
 
 export default function AgendaPage() { return <ParentShell><Agenda /></ParentShell>; }
@@ -38,7 +39,6 @@ function Agenda() {
   const [routines, setRoutines] = useState(false);
   const [copyOpen, setCopyOpen] = useState(false);
 
-  const week = useMemo(() => Array.from({ length: 7 }, (_, i) => addDaysISO(weekStart(day), i)), [day]);
   useLive(['routines', 'subjects'], reload, 'parent-agenda');
   const load = useMemo(() => tasks.reduce((n, t) => n + (t.status === 'skipped' ? 0 : t.duration_min), 0), [tasks]);
   if (loading || !child || !settings) return <Loader />;
@@ -46,31 +46,13 @@ function Agenda() {
 
   return (
     <main className="mx-auto max-w-lg px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
-      <div className="flex items-center justify-between gap-2">
-        <h1 className="text-3xl font-black text-ink">Agenda</h1>
-        <div className="flex gap-2">
-          <button onClick={() => setRoutines(true)} className="chip"><Repeat size={14} /> Routines</button>
-          <button onClick={() => setCopyOpen(true)} className="chip"><Copy size={14} /></button>
-        </div>
-      </div>
+      <PageHeader title="Agenda" right={<>
+        <button onClick={() => setRoutines(true)} className="chip"><Repeat size={14} /> Routines</button>
+        <button onClick={() => setCopyOpen(true)} className="chip" aria-label="Copier la journée"><Copy size={14} /></button>
+      </>} />
 
-      <div className="mt-4 flex gap-2">
-        {week.map((d) => {
-          const active = d === day;
-          return (
-            <button key={d} onClick={() => setDay(d)}
-                    className={clsx('flex flex-1 flex-col items-center rounded-3xl border-2 py-2.5 no-select transition',
-                      active ? 'border-grape bg-grape text-white' : d === todayISO() ? 'border-grape bg-card text-grape' : 'border-line bg-card text-muted')}>
-              <span className="text-[10px] font-black uppercase">{dayShort(dowOf(d))}</span>
-              <span className="text-xl font-black leading-tight">{Number(d.slice(-2))}</span>
-            </button>
-          );
-        })}
-      </div>
-      <div className="mt-3 flex justify-between">
-        <button onClick={() => setDay(addDaysISO(day, -7))} className="chip">←</button>
-        <button onClick={() => setDay(todayISO())} className="chip !border-grape !text-grape">Aujourd’hui</button>
-        <button onClick={() => setDay(addDaysISO(day, 7))} className="chip">→</button>
+      <div className="mt-4">
+        <WeekStrip childId={child.id} day={day} onChange={setDay} refreshKey={tasks} />
       </div>
 
       <div className="mt-5 flex items-center justify-between">
@@ -81,7 +63,7 @@ function Agenda() {
       </div>
 
       {tasks.length === 0 ? (
-        <div className="mt-5"><Empty emoji="📝" title="Journée vide" /></div>
+        <div className="mt-5"><Empty emoji="📝" title="Journée vide" hint="Ajoute une tâche, ou copie une autre journée avec le bouton ⧉." /></div>
       ) : (
         <ul className="stagger mt-4 space-y-3">
           {tasks.map((t) => (
@@ -111,7 +93,7 @@ function Agenda() {
       )}
 
       <button onClick={() => setDraft({ ...emptyDraft(), subject_id: subjects[0]?.id ?? '' })}
-              className="btn-grape btn-lg mt-5 w-full"><Plus size={20} /> Ajouter</button>
+              className="btn-grape btn-lg sticky bottom-28 mt-5 w-full shadow-lift"><Plus size={20} /> Ajouter une tâche</button>
 
       {draft && <TaskSheet draft={draft} day={day} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); reload(); }} />}
       <RoutinesSheet open={routines} onClose={() => setRoutines(false)} onGenerated={reload} />
@@ -129,6 +111,21 @@ function toDraft(t: Task): Draft {
     allow_postpone: t.allow_postpone, link_url: t.link_url ?? '', parent_note: t.parent_note ?? '',
     subtasks: (t.subtasks ?? []).map((s) => s.label),
   };
+}
+
+/** Choix à trois états : suivre le réglage général, forcer oui, forcer non. */
+function Tri({ v, on }: { v: boolean | null; fb?: boolean; on: (x: boolean | null) => void }) {
+  return (
+    <div className="flex gap-2">
+      {([['Auto', null], ['Oui', true], ['Non', false]] as [string, boolean | null][]).map(([lbl, val]) => (
+        <button key={lbl} onClick={() => on(val)}
+                className={clsx('flex-1 rounded-2xl border-2 py-2.5 text-sm font-extrabold transition',
+                  v === val ? 'border-grape bg-grape-light text-grape' : 'border-line bg-card text-muted')}>
+          {lbl}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string; onClose: () => void; onSaved: () => void }) {
@@ -192,24 +189,16 @@ function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string
     finally { setAiBusy(false); }
   };
 
-  const Tri = ({ v, fb, on }: { v: boolean | null; fb: boolean; on: (x: boolean | null) => void }) => (
-    <div className="flex gap-2">
-      {([['Auto', null], ['Oui', true], ['Non', false]] as [string, boolean | null][]).map(([lbl, val]) => (
-        <button key={lbl} onClick={() => on(val)}
-                className={clsx('flex-1 rounded-2xl border-2 py-2.5 text-sm font-extrabold transition',
-                  v === val ? 'border-grape bg-grape-light text-grape' : 'border-line bg-card text-muted')}>
-          {lbl}
-        </button>
-      ))}
-    </div>
-  );
-
   return (
     <Sheet open onClose={onClose} title={d.id ? 'Modifier' : 'Nouvelle tâche'}
            footer={
              <div className="flex gap-2.5">
                {d.id && (
-                 <button onClick={async () => { await supabase.from('tasks').delete().eq('id', d.id!); toast('Supprimée'); onSaved(); }}
+                 <button aria-label="Supprimer la tâche"
+                         onClick={async () => {
+                           if (!confirm('Supprimer cette tâche ?')) return;
+                           await supabase.from('tasks').delete().eq('id', d.id!); toast('Supprimée'); onSaved();
+                         }}
                          className="btn-flame !px-5"><Trash2 size={18} /></button>
                )}
                <button onClick={save} disabled={busy} className="btn-grape btn-lg flex-1">

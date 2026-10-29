@@ -68,13 +68,16 @@ export async function scheduleTask(taskId: string, time: string) {
   }).eq('id', taskId);
 }
 
-export async function reportBlocked(task: Task, note: string, childId: string, parentId: string | null) {
+export async function reportBlocked(task: Task, note: string, childId: string) {
   await supabase.from('tasks').update({ blocked_note: note }).eq('id', task.id);
-  if (parentId) {
-    await supabase.from('messages').insert({
-      from_id: childId, to_id: parentId, task_id: task.id, kind: 'blocked',
-      body: note || 'Je bloque sur cette tâche', emoji: '🆘',
-    });
+  // L'écran enfant ne connaît pas l'identifiant du parent : sans cette
+  // recherche, le message n'était jamais écrit et n'apparaissait pas côté parent.
+  const { data: parents } = await supabase.from('profiles').select('id').eq('role', 'parent');
+  if (parents?.length) {
+    await supabase.from('messages').insert(parents.map((p) => ({
+      from_id: childId, to_id: p.id, task_id: task.id, kind: 'blocked',
+      body: `${task.title} — ${note.trim() || 'je bloque sur cette tâche'}`, emoji: '🆘',
+    })));
   }
   await notify('blocked', { taskId: task.id, note });
 }

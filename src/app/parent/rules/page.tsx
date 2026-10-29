@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import ParentShell from '@/components/ParentShell';
 import { useApp } from '@/components/AppProvider';
@@ -15,6 +15,34 @@ import type { Reward } from '@/lib/types';
 import type { Settings, Tone, ParentNotifKind, ChildNotifKind } from '@/lib/types';
 
 export default function RulesPage() { return <ParentShell><Rules /></ParentShell>; }
+
+/**
+ * Champs du formulaire. Ils étaient déclarés à l'intérieur de `Rules` : chaque
+ * frappe recréait leur type, React démontait le champ et le clavier se
+ * fermait après le premier chiffre (« 27 » donnait « 2 »). Ils lisent
+ * désormais l'état via un contexte.
+ */
+const FormCtx = createContext<{ s: Settings; set: <K extends keyof Settings>(k: K, v: Settings[K]) => void } | null>(null);
+
+function Num({ k, label, suffix, help }: { k: keyof Settings; label: string; suffix?: string; help?: React.ReactNode }) {
+  const { s, set } = useContext(FormCtx)!;
+  return (
+    <div>
+      {help ? <LabelHelp label={label} help={help} /> : <label className="label">{label}</label>}
+      <NumberField value={s[k] as number} suffix={suffix} onChange={(n) => set(k, n as any)} />
+    </div>
+  );
+}
+
+function Time({ k, label }: { k: keyof Settings; label: string }) {
+  const { s, set } = useContext(FormCtx)!;
+  return (
+    <div>
+      <label className="label">{label}</label>
+      <input type="time" className="field" value={String(s[k]).slice(0, 5)} onChange={(e) => set(k, e.target.value as any)} />
+    </div>
+  );
+}
 
 const CURRENCIES = ['🪙', '⭐', '💎', '🔶', '🍬', '⚡', '🏅', '🌟'];
 
@@ -52,10 +80,14 @@ function Rules() {
   const [tab, setTab] = useState<'eco' | 'xp' | 'rules' | 'notif' | 'goal'>('eco');
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { if (settings) setS(settings); }, [settings]);
+  const [dirty, setDirty] = useState(false);
+
+  // Une mise à jour venue du serveur (autre appareil, retour dans l'app)
+  // écrasait les modifications en cours : on ne la reprend que hors saisie.
+  useEffect(() => { if (settings && !dirty) setS(settings); }, [settings, dirty]);
   if (!s) return <Loader />;
 
-  const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setS({ ...s, [k]: v });
+  const set = <K extends keyof Settings>(k: K, v: Settings[K]) => { setS((cur) => (cur ? { ...cur, [k]: v } : cur)); setDirty(true); };
 
   const save = async () => {
     setBusy(true);
@@ -63,26 +95,11 @@ function Rules() {
     const { error } = await supabase.from('settings').update({ ...rest, updated_at: new Date().toISOString() }).eq('id', 1);
     setBusy(false);
     if (error) toast(error.message, 'err');
-    else { await refresh(); toast('Enregistré'); }
+    else { setDirty(false); await refresh(); toast('Enregistré'); }
   };
 
-  const Num = ({ k, label, suffix, help }: {
-    k: keyof Settings; label: string; suffix?: string; help?: React.ReactNode;
-  }) => (
-    <div>
-      {help ? <LabelHelp label={label} help={help} /> : <label className="label">{label}</label>}
-      <NumberField value={s[k] as number} suffix={suffix} onChange={(n) => set(k, n as any)} />
-    </div>
-  );
-
-  const Time = ({ k, label }: { k: keyof Settings; label: string }) => (
-    <div>
-      <label className="label">{label}</label>
-      <input type="time" className="field" value={String(s[k]).slice(0, 5)} onChange={(e) => set(k, e.target.value as any)} />
-    </div>
-  );
-
   return (
+    <FormCtx.Provider value={{ s, set }}>
     <main className="mx-auto max-w-lg px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
       <SecretResetTitle />
 
@@ -97,7 +114,7 @@ function Rules() {
       </div>
 
       <div className="mt-5 space-y-5">
-        {tab === 'eco' && <Calibrator s={s} onApply={(v) => setS({ ...s, ...v })} />}
+        {tab === 'eco' && <Calibrator s={s} onApply={(v) => { setS({ ...s, ...v }); setDirty(true); }} />}
 
         {tab === 'eco' && (
           <>
@@ -178,7 +195,7 @@ function Rules() {
             <Num k="xp_per_task" label="XP par tâche" suffix="⚡"
                  help={<><p>Multiplié par la difficulté de la tâche, comme les points.</p></>} />
             <Num k="xp_per_quiz_answer" label="XP par bonne réponse" suffix="⚡" />
-            <LevelPace s={s} onGoToEco={() => setTab('eco')} onChange={(v) => setS({ ...s, ...v })} />
+            <LevelPace s={s} onGoToEco={() => setTab('eco')} onChange={(v) => { setS({ ...s, ...v }); setDirty(true); }} />
             <Num k="level_up_coins" label="Bonus à chaque niveau" suffix={s.currency_emoji} />
             <Num k="daily_xp_goal" label="Objectif XP du jour" suffix="⚡"
                  help={<>
@@ -338,15 +355,20 @@ function Rules() {
             <div className="card p-4">
               <p className="font-extrabold text-ink">👧 {child?.display_name ?? '—'}</p>
             </div>
-            <button onClick={signOut} className="btn-plain w-full">Se déconnecter</button>
+            <button onClick={() => { if (confirm('Se déconnecter de cet appareil ?')) signOut(); }} className="btn-plain w-full">Se déconnecter</button>
           </>
         )}
       </div>
 
-      <button onClick={save} disabled={busy} className="btn-grape btn-lg sticky bottom-28 mt-7 w-full shadow-lift">
-        {busy ? '…' : '💾 Enregistrer'}
-      </button>
+      {dirty ? (
+        <button onClick={save} disabled={busy} className="btn-grape btn-lg sticky bottom-28 mt-7 w-full animate-rise shadow-lift">
+          {busy ? 'Enregistrement…' : '💾 Enregistrer les modifications'}
+        </button>
+      ) : (
+        <p className="mt-7 text-center text-sm font-bold text-muted">✓ Tout est enregistré</p>
+      )}
     </main>
+    </FormCtx.Provider>
   );
 }
 
@@ -591,7 +613,7 @@ function SecretResetTitle() {
 
   return (
     <>
-      <h1 onClick={tap} className="select-none text-3xl font-black text-ink">Réglages</h1>
+      <h1 onClick={tap} className="select-none text-[32px] font-black leading-tight text-ink">Réglages</h1>
       <Sheet open={confirm} onClose={() => setConfirm(false)} title="Tout effacer ?">
         <p className="font-medium leading-relaxed text-muted">
           Points, XP, niveau, série, tâches, routines, quiz, messages, badges, avatars débloqués,

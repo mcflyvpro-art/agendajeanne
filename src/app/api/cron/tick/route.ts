@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { admin } from '@/lib/admin';
-import { sendPush } from '@/lib/push';
+import { pushToProfile } from '@/lib/push';
 import { notifCopy, parentCopy } from '@/lib/tone';
 import { todayISO, addDaysISO, nowMinutes, toMinutes, hhmm, dowOf } from '@/lib/dates';
 import type { Profile, Settings, Task, Routine } from '@/lib/types';
@@ -43,10 +43,9 @@ async function run(req: Request) {
 
   /** Envoie et nettoie l'abonnement s'il est mort. */
   const push = async (p: Profile, c: { title: string; body: string }, kind: string, url = '/') => {
-    const r = await sendPush(p.push_subscription, { ...c, kind, url, tag: kind });
-    if (r.gone) await db.from('profiles').update({ push_enabled: false, push_subscription: null }).eq('id', p.id);
-    if (r.ok) log.push(`${kind}→${p.display_name}`);
-    return r.ok;
+    const ok = await pushToProfile(db, p, { ...c, kind, url, tag: kind });
+    if (ok) log.push(`${kind}→${p.display_name}`);
+    return ok;
   };
   const pushParents = (c: { title: string; body: string }, kind: string, url = '/parent') =>
     Promise.all(parents.map((p) => push(p, c, kind, url)));

@@ -24,6 +24,18 @@ export function useTaskTimer(task: Task | null) {
     setRunning(task.timer_running && document.visibilityState === 'visible');
   }, [task?.id]);
 
+  // Même compte ouvert sur deux appareils : chacun compte de son côté et écrit
+  // son total. On s'aligne sur le plus avancé quand la base en reçoit un.
+  useEffect(() => {
+    if (!task) return;
+    const remote = elapsedOf(task);
+    if (remote > secRef.current + 2) {
+      secRef.current = remote;
+      savedRef.current = remote;
+      setSeconds(remote);
+    }
+  }, [task?.active_seconds, task?.timer_segment_at]);
+
   // Tic-tac, uniquement page visible
   useEffect(() => {
     if (!task || task.status !== 'doing') return;

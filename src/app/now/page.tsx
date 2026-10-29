@@ -48,15 +48,17 @@ function Now() {
       <Confetti fire={fire} />
       <Header xp={xpToday(tasks)} prog={prog} />
 
-      <div className="mt-5 space-y-4">
+      {/* La tâche du moment passe avant tout le reste : c'est la seule chose
+          à faire en ouvrant l'app, son bouton doit être visible sans défiler. */}
+      <div className="mt-4 space-y-4">
         <PushManager />
-        <MoodRow />
-        <AssignedQuizCard />
         {current ? (
           current.status === 'doing'
             ? <Focus task={current} onDone={onDone} />
             : <Next task={current} onChanged={reload} />
         ) : <AllDone done={prog.done} />}
+        <AssignedQuizCard />
+        <MoodRow />
         <Queue tasks={tasks} currentId={current?.id} onChanged={reload} />
       </div>
 
@@ -66,6 +68,11 @@ function Now() {
 }
 
 /* ------------------------------------------------------------------ entête */
+function greeting() {
+  const m = nowMinutes();
+  return m < 18 * 60 ? (m < 12 * 60 ? 'Bonjour' : 'Bon après-midi') : 'Bonsoir';
+}
+
 function Header({ xp, prog }: { xp: number; prog: { done: number; total: number; pct: number } }) {
   const { profile, settings } = useApp();
   if (!profile || !settings) return null;
@@ -76,41 +83,50 @@ function Header({ xp, prog }: { xp: number; prog: { done: number; total: number;
   return (
     <header>
       <div className="flex items-center gap-3">
-        <div className="grid h-14 w-14 shrink-0 place-items-center rounded-3xl bg-grape-light text-3xl">
+        <Link href="/me" aria-label="Mon profil"
+              className="grid h-14 w-14 shrink-0 place-items-center rounded-3xl bg-grape-light text-3xl shadow-float press">
           {profile.avatar_emoji}
-        </div>
+        </Link>
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-2xl font-black text-ink">{profile.display_name}</h1>
-          <p className="text-sm font-bold text-grape">Niveau {lvl.level} · {lvl.title}</p>
+          <p className="text-xs font-black uppercase tracking-wide text-muted">{greeting()}</p>
+          <h1 className="truncate text-2xl font-black leading-tight text-ink">{profile.display_name}</h1>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Inbox />
-          {profile.streak_current > 0 && (
-            <span className="chip !border-sun !bg-sun-light !text-sun-dark">🔥 {profile.streak_current}</span>
-          )}
-          <Link href="/shop" className="chip !border-grape !bg-grape-light !text-grape">
-            {settings.currency_emoji} {profile.coins}
-          </Link>
-        </div>
+        <Inbox />
+        <Link href="/shop" aria-label="Mon solde"
+              className="flex h-10 shrink-0 items-center gap-1.5 rounded-full border-2 border-grape/25 bg-card px-3.5 text-base font-black text-grape shadow-float press">
+          <span>{settings.currency_emoji}</span><span className="tabular-nums">{profile.coins}</span>
+        </Link>
       </div>
 
-      <div className="mt-4 flex gap-3">
-        <div className="tile flex-1 p-3.5">
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="text-xs font-extrabold text-ink">⚡ {xp} / {goal} XP</span>
-            <span className="text-xs font-bold text-muted">{goalPct}%</span>
-          </div>
-          <Bar pct={goalPct} color="#F5A524" height={12} />
+      <section className="card mt-4 p-4">
+        <div className="flex items-center justify-between gap-2">
+          <Link href="/road" className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-grape-light px-3 py-1.5 text-xs font-black text-grape press">
+            <span>⭐ Niveau {lvl.level}</span><span className="truncate font-extrabold opacity-80">· {lvl.title}</span><span>›</span>
+          </Link>
+          {profile.streak_current > 0 && (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sun-light px-3 py-1.5 text-xs font-black text-sun-dark">
+              🔥 {profile.streak_current} {profile.streak_current > 1 ? 'jours' : 'jour'}
+            </span>
+          )}
         </div>
-        <div className="tile flex-1 p-3.5">
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="text-xs font-extrabold text-ink">✅ {prog.done} / {prog.total}</span>
-            <span className="text-xs font-bold text-muted">{prog.pct}%</span>
-          </div>
-          <Bar pct={prog.pct} color={prog.pct === 100 ? '#1FC08A' : '#7C4DEE'} height={12} />
+        <div className="mt-3.5 space-y-3">
+          <Progress label={<>⚡ <b className="text-ink">{xp}</b> / {goal} XP</>} pct={goalPct} color="#F5A524" />
+          <Progress label={<>✅ <b className="text-ink">{prog.done}</b> / {prog.total} tâches</>} pct={prog.pct}
+                    color={prog.pct === 100 ? '#1FC08A' : '#7C4DEE'} />
         </div>
-      </div>
+      </section>
     </header>
+  );
+}
+
+function Progress({ label, pct, color }: { label: React.ReactNode; pct: number; color: string }) {
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between text-xs font-bold text-muted">
+        <span>{label}</span><span className="tabular-nums">{pct}%</span>
+      </div>
+      <Bar pct={pct} color={color} height={10} />
+    </div>
   );
 }
 
@@ -157,7 +173,7 @@ function Inbox() {
   return (
     <>
       <button onClick={openInbox} aria-label="Messages" className="relative no-select active:scale-90">
-        <span className="grid h-9 w-9 place-items-center rounded-full bg-card text-xl shadow-float">💌</span>
+        <span className="grid h-10 w-10 place-items-center rounded-full bg-card text-xl shadow-float">💌</span>
         {unread > 0 && (
           <span className="absolute -right-1 -top-1 grid h-5 min-w-[20px] place-items-center rounded-full bg-flame px-1 text-[11px] font-black text-white">
             {unread}
@@ -263,14 +279,16 @@ function MoodRow() {
   return (
     <section className="card p-4">
       <div className="flex items-center justify-between">
-        <p className="text-base font-extrabold text-ink">Comment tu te sens ?</p>
-        <button onClick={() => setMore((m) => !m)} aria-label="Plus d’humeurs"
-                className="text-2xl no-select active:scale-90">{more ? '➖' : '➕'}</button>
+        <p className="font-extrabold text-ink">Comment tu te sens ?</p>
+        <button onClick={() => setMore((m) => !m)}
+                className="rounded-full bg-soft px-3 py-1 text-xs font-black text-muted no-select active:scale-95">
+          {more ? 'Moins' : 'Plus'}
+        </button>
       </div>
       <div className="mt-3 grid grid-cols-5 gap-2">
         {shown.map((m) => (
           <button key={m.code} onClick={() => pick(m.code, m.value, m.emoji)} aria-label={m.label}
-                  className="grid aspect-square place-items-center rounded-3xl border-2 border-line bg-card text-3xl transition no-select active:scale-90">
+                  className="grid aspect-square place-items-center rounded-3xl border-2 border-line bg-card text-3xl transition no-select active:scale-90 active:border-grape">
             {m.emoji}
           </button>
         ))}
@@ -301,12 +319,12 @@ function Next({ task, onChanged }: { task: Task; onChanged: () => void }) {
             )}
             <span className="chip">🕐 {task.start_time ? hhmm(task.start_time) : 'libre'}</span>
             <span className="chip">⏳ {humanDuration(task.duration_min)}</span>
-            <span className="chip !border-grape !bg-grape-light !text-grape">
-              +{task.coins} {settings.currency_emoji}
-            </span>
           </div>
 
-          <h2 className="mt-4 text-3xl font-black leading-tight text-ink">{task.title}</h2>
+          <p className="mt-4 text-xs font-black uppercase tracking-wide text-muted">
+            {task.start_time && toMinutes(task.start_time)! > nowMinutes() ? 'Prochaine tâche' : 'À faire maintenant'}
+          </p>
+          <h2 className="mt-1 text-[26px] font-black leading-tight text-ink">{task.title}</h2>
           {task.description && <p className="mt-2 whitespace-pre-wrap font-medium text-muted">{task.description}</p>}
 
           {task.parent_note && (
@@ -329,6 +347,7 @@ function Next({ task, onChanged }: { task: Task; onChanged: () => void }) {
           <button onClick={async () => { await A.startTask(task); onChanged(); }}
                   className="btn-leaf btn-lg mt-5 w-full animate-halo">
             ▶️ Je commence
+            <span className="ml-1 rounded-full bg-white/25 px-2.5 py-0.5 text-sm">+{task.coins} {settings.currency_emoji}</span>
           </button>
 
           <div className="mt-3 grid grid-cols-2 gap-2.5">
@@ -346,14 +365,15 @@ function Next({ task, onChanged }: { task: Task; onChanged: () => void }) {
              footer={
                <button className="btn-grape btn-lg w-full"
                        onClick={async () => {
-                         await A.reportBlocked(task, note, profile.id, null);
+                         await A.reportBlocked(task, note, profile.id);
                          setBlocked(false); setNote(''); toast('Message envoyé');
                        }}>
                  Envoyer
                </button>
              }>
+        <p className="mb-3 text-sm font-semibold text-muted">Tes parents reçoivent ton message tout de suite.</p>
         <textarea className="field min-h-[120px]" value={note} onChange={(e) => setNote(e.target.value)}
-                  placeholder="Je comprends pas l’exercice 3…" />
+                  placeholder="Je comprends pas l’exercice 3…" autoFocus />
       </Sheet>
     </>
   );
@@ -378,9 +398,14 @@ function Focus({ task, onDone }: { task: Task; onDone: (a: A.AwardResult | null)
     <>
       <section className="card animate-rise p-5">
         <h2 className="text-center text-2xl font-black leading-tight text-ink">{task.title}</h2>
+        {task.link_url && (
+          <div className="mt-2 text-center">
+            <a href={task.link_url} target="_blank" rel="noreferrer" className="chip !border-grape !text-grape">🔗 Ouvrir le cours</a>
+          </div>
+        )}
 
-        <div className="mt-5 flex justify-center">
-          <Ring pct={pct} size={230} stroke={18} color={canFinish ? '#1FC08A' : '#7C4DEE'}>
+        <div className="mt-4 flex justify-center">
+          <Ring pct={pct} size={200} stroke={16} color={canFinish ? '#1FC08A' : '#7C4DEE'}>
             <div className="text-5xl font-black tabular-nums text-ink">{mm}:{ss}</div>
             <div className={clsx('mt-2 text-sm font-extrabold', running ? 'text-leaf' : 'text-sun-dark')}>
               {running ? '▶️ ça tourne' : '⏸️ en pause'}
@@ -411,10 +436,6 @@ function Focus({ task, onDone }: { task: Task; onDone: (a: A.AwardResult | null)
               ))}
             </ul>
           </div>
-        )}
-
-        {task.link_url && (
-          <a href={task.link_url} target="_blank" rel="noreferrer" className="btn-plain mt-4 w-full">🔗 Ouvrir</a>
         )}
 
         <button onClick={() => setFinish(true)} disabled={!canFinish}
@@ -531,14 +552,19 @@ function Queue({ tasks, currentId, onChanged }: { tasks: Task[]; currentId?: str
   return (
     <>
       <section className="card p-4">
-        <p className="mb-3 text-base font-extrabold text-ink">Ensuite</p>
+        <p className="mb-3 font-extrabold text-ink">Ensuite <span className="text-muted">· {rest.length}</span></p>
         <ul className="space-y-2">
           {rest.map((t) => (
             <li key={t.id} className="flex items-center gap-3 rounded-3xl bg-soft px-3.5 py-3">
               <span className="w-12 shrink-0 text-sm font-black tabular-nums text-ink">
-                {t.start_time ? hhmm(t.start_time) : '—'}
+                {t.start_time ? hhmm(t.start_time) : 'libre'}
               </span>
-              <span className="min-w-0 flex-1 truncate font-bold text-ink">{t.title}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-bold text-ink">{t.title}</span>
+                <span className="block truncate text-xs font-bold text-muted">
+                  {t.subject ? `${t.subject.emoji} ${t.subject.name} · ` : ''}{humanDuration(t.duration_min)}
+                </span>
+              </span>
               {!t.start_time && (
                 <button onClick={() => setPlace(t)}
                         className="shrink-0 rounded-2xl bg-grape px-3 py-2 text-xs font-black text-white no-select active:scale-95">

@@ -14,7 +14,7 @@ import { settleDay, adjustBalance, elapsedOf, notify, resolveRedemption } from '
 import { KUDOS } from '@/lib/tone';
 import { moodEmoji } from '@/lib/mood';
 import { reactionEmoji } from '@/lib/reactions';
-import { Loader, Bar, Stat, Sheet, Empty, NumberField, toast } from '@/components/ui';
+import { Loader, Bar, Sheet, Empty, NumberField, SectionTitle, Lightbox, toast } from '@/components/ui';
 import type { Task, Redemption, Message, Mood } from '@/lib/types';
 
 export default function ParentHome() { return <ParentShell><Dashboard /></ParentShell>; }
@@ -113,49 +113,52 @@ function Dashboard() {
       <PushManager />
 
       {!child.push_enabled && (
-        <div className="card border-2 border-flame bg-flame-light p-4 text-center">
-          <p className="font-extrabold text-flame-dark">🔕 {child.display_name} ne reçoit aucun rappel</p>
+        <div className="card flex items-start gap-3 border-2 border-flame/40 bg-flame-light p-4">
+          <span className="text-2xl">🔕</span>
+          <p className="text-sm font-bold leading-snug text-ink">
+            <b className="text-flame-dark">{child.display_name} ne reçoit aucun rappel.</b> Sur son téléphone, ouvre l’app depuis
+            l’icône de l’écran d’accueil et appuie sur « Activer ».
+          </p>
         </div>
       )}
 
-      <div className="flex gap-2.5">
-        <Stat emoji="✅" value={`${prog.done}/${prog.total}`} label="tâches" color={prog.pct === 100 ? '#1FC08A' : undefined} />
-        <Stat emoji="⚡" value={xpToday(tasks)} label="XP jour" color="#F5A524" />
-        <Stat emoji="🔥" value={child.streak_current} label="série" color="#F5A524" />
-        <Stat emoji="⭐" value={lvl.level} label="niveau" color="#7C4DEE" />
-      </div>
-      <Bar pct={prog.pct} color={prog.pct === 100 ? '#1FC08A' : '#7C4DEE'} />
-
-      <button onClick={() => setWallet(true)} className="card flex w-full items-center gap-3 p-4 no-select active:scale-[.99]">
-        <span className="text-3xl">{settings.currency_emoji}</span>
-        <span className="flex-1 text-left text-2xl font-black text-grape">{child.coins}</span>
-        <span className="chip">✏️ Modifier</span>
-      </button>
-
-      {!!late.length && (
-        <section className="card border-2 border-flame bg-flame-light p-4">
-          <p className="font-black text-flame-dark">⏰ En retard</p>
-          <ul className="mt-2 space-y-1">
-            {late.map((t) => (
-              <li key={t.id} className="font-bold text-ink">
-                {hhmm(t.start_time)} · {t.title} <span className="text-flame-dark">+{nowMinutes() - toMinutes(t.start_time)!} min</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <section className="card p-4">
+        <div className="grid grid-cols-4 gap-1 text-center">
+          <Metric value={`${prog.done}/${prog.total}`} label="tâches" color={prog.pct === 100 ? '#1FC08A' : '#2E2445'} />
+          <Metric value={xpToday(tasks)} label="XP jour" color="#C77F12" />
+          <Metric value={`🔥 ${child.streak_current}`} label="série" color="#C77F12" />
+          <Metric value={lvl.level} label="niveau" color="#7C4DEE" />
+        </div>
+        <Bar pct={prog.pct} color={prog.pct === 100 ? '#1FC08A' : '#7C4DEE'} height={10} className="mt-3.5" />
+        <button onClick={() => setWallet(true)}
+                className="mt-3.5 flex w-full items-center gap-3 rounded-3xl bg-soft px-4 py-3 no-select active:scale-[.99]">
+          <span className="text-2xl">{settings.currency_emoji}</span>
+          <span className="flex-1 text-left">
+            <span className="block text-xl font-black leading-tight text-grape tabular-nums">{child.coins}</span>
+            <span className="block text-xs font-bold text-muted">{settings.currency_name} sur son compte</span>
+          </span>
+          <span className="chip">✏️ Ajuster</span>
+        </button>
+      </section>
 
       {!!submitted.length && (
         <section className="space-y-3">
-          <p className="text-lg font-black text-ink">👁️ À valider</p>
+          <SectionTitle right={<span className="chip !border-sun !bg-sun-light !text-sun-dark">{submitted.length}</span>}>
+            👁️ À valider
+          </SectionTitle>
           {submitted.map((t) => (
             <div key={t.id} className="card p-4">
-              <p className="font-extrabold text-ink">{t.title}</p>
+              <p className="font-extrabold leading-snug text-ink">{t.title}</p>
               <p className="mt-1 text-xs font-bold text-muted">
                 {t.day !== today && <span className="capitalize">{relativeDay(t.day)} · </span>}
                 {Math.round(elapsedOf(t) / 60)} min travaillées
               </p>
-              {t.proof_url && <img src={t.proof_url} alt="" className="mt-3 max-h-64 w-full rounded-3xl bg-soft object-contain" />}
+              {t.proof_url && (
+                <button onClick={() => setPhoto(t.proof_url)} className="relative mt-3 block w-full overflow-hidden rounded-3xl bg-soft">
+                  <img src={t.proof_url} alt="Photo envoyée" className="max-h-72 w-full object-contain" />
+                  <span className="absolute bottom-2 right-2 rounded-full bg-ink/70 px-3 py-1 text-xs font-black text-white backdrop-blur">🔍 Agrandir</span>
+                </button>
+              )}
               <div className="mt-3 flex gap-2.5">
                 <button onClick={() => validate(t, false)} className="btn-flame flex-1">❌ Refaire</button>
                 <button onClick={() => validate(t, true)} className="btn-leaf flex-1">✅ Valider</button>
@@ -185,24 +188,51 @@ function Dashboard() {
       {!!msgs.length && (
         <section className="space-y-2.5">
           {msgs.map((m) => (
-            <div key={m.id} className={clsx('card p-4', m.kind === 'blocked' && 'border-2 border-sun bg-sun-light')}>
-              <p className="font-bold text-ink">{m.emoji} {m.body}</p>
-              <button className="mt-2 text-xs font-black text-grape"
-                      onClick={async () => { await supabase.from('messages').update({ read_at: new Date().toISOString() }).eq('id', m.id); load(); }}>
-                Marquer lu
+            <div key={m.id} className={clsx('card flex items-start gap-3 p-4', m.kind === 'blocked' && 'border-2 border-sun bg-sun-light')}>
+              <span className="text-2xl">{m.emoji ?? '💬'}</span>
+              <div className="min-w-0 flex-1">
+                {m.kind === 'blocked' && <p className="text-xs font-black uppercase tracking-wide text-sun-dark">{child.display_name} bloque</p>}
+                <p className="font-bold leading-snug text-ink">{m.body}</p>
+                <p className="mt-1 text-xs font-bold text-muted">
+                  {new Date(m.created_at).toLocaleString('fr-FR', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}
+                </p>
+              </div>
+              <button className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs font-black text-grape shadow-float no-select active:scale-95"
+                      onClick={async () => {
+                        setMsgs((list) => list.filter((x) => x.id !== m.id));
+                        await supabase.from('messages').update({ read_at: new Date().toISOString() }).eq('id', m.id);
+                      }}>
+                ✓ Lu
               </button>
             </div>
           ))}
         </section>
       )}
 
+      {!!late.length && (
+        <section className="card border-2 border-flame/40 bg-flame-light p-4">
+          <p className="font-black text-flame-dark">⏰ Pas encore commencé</p>
+          <ul className="mt-2 space-y-1">
+            {late.map((t) => (
+              <li key={t.id} className="text-sm font-bold text-ink">
+                {hhmm(t.start_time)} · {t.title} <span className="text-flame-dark">· {nowMinutes() - toMinutes(t.start_time)!} min de retard</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section>
-        <p className="mb-3 text-lg font-black text-ink">📋 Sa journée</p>
-        {tasks.length === 0 ? <Empty emoji="📭" title="Rien de prévu" /> : (
+        <SectionTitle>📋 Sa journée</SectionTitle>
+        {tasks.length === 0 ? (
+          <Empty emoji="📭" title="Rien de prévu" hint="Ajoute une tâche ou une routine depuis l’agenda."
+                 action={<Link href="/parent/agenda" className="btn-grape">➕ Ajouter une tâche</Link>} />
+        ) : (
           <ul className="space-y-2">
             {tasks.map((t) => (
               <li key={t.id} className="card flex items-center gap-3 px-4 py-3">
-                <span className="w-12 shrink-0 text-sm font-black tabular-nums text-ink">{t.start_time ? hhmm(t.start_time) : '—'}</span>
+                <span className="w-12 shrink-0 text-sm font-black tabular-nums text-ink">{t.start_time ? hhmm(t.start_time) : 'libre'}</span>
+                <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full" style={{ background: t.subject?.color ?? '#7C4DEE' }} />
                 <span className={clsx('flex-1 truncate font-bold text-ink', t.status === 'done' && 'text-muted line-through')}>{t.title}</span>
                 {/* Seul accès à la photo d'une tâche validée sans passer par « À valider ». */}
                 {t.proof_url && (
@@ -210,7 +240,7 @@ function Dashboard() {
                           className="grid h-9 w-9 shrink-0 place-items-center rounded-2xl bg-grape-light text-lg no-select active:scale-90">📷</button>
                 )}
                 <span className="shrink-0 text-xl">
-                  {t.status === 'done' ? '✅' : t.status === 'doing' ? '▶️' : t.status === 'submitted' ? '⏳' : '⬜'}
+                  {t.status === 'done' ? '✅' : t.status === 'doing' ? '▶️' : t.status === 'submitted' ? '⏳' : t.status === 'missed' ? '⌛' : '⬜'}
                 </span>
               </li>
             ))}
@@ -229,10 +259,17 @@ function Dashboard() {
       <KudosSheet open={kudos} onClose={() => setKudos(false)} />
       <WalletSheet open={wallet} onClose={() => setWallet(false)} />
       <MessageSheet open={mailbox} onClose={() => setMailbox(false)} onSent={() => setMailboxKey((k) => k + 1)} />
-      <Sheet open={!!photo} onClose={() => setPhoto(null)} title="📷 Photo envoyée">
-        {photo && <img src={photo} alt="" className="w-full rounded-3xl bg-soft object-contain" />}
-      </Sheet>
+      <Lightbox src={photo} onClose={() => setPhoto(null)} />
     </main>
+  );
+}
+
+function Metric({ value, label, color }: { value: React.ReactNode; label: string; color: string }) {
+  return (
+    <div>
+      <div className="text-xl font-black tabular-nums leading-tight" style={{ color }}>{value}</div>
+      <div className="mt-0.5 text-[10px] font-black uppercase tracking-wide text-muted">{label}</div>
+    </div>
   );
 }
 

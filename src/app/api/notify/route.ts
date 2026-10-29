@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { admin } from '@/lib/admin';
-import { sendPush } from '@/lib/push';
+import { pushToProfile } from '@/lib/push';
 import { whoami } from '@/lib/auth-api';
 import type { Profile, Settings } from '@/lib/types';
 
@@ -72,11 +72,8 @@ export async function POST(req: Request) {
   const child = all.find((p) => p.role === 'child');
 
   const deliver = async (targets: Profile[], c: Copy, kind: string) => {
-    const res = await Promise.all(targets.map(async (p) => {
-      const r = await sendPush(p.push_subscription, { title: c.title, body: c.body, url: c.url, kind, tag: kind });
-      if (r.gone) await db.from('profiles').update({ push_enabled: false, push_subscription: null }).eq('id', p.id);
-      return r.ok;
-    }));
+    const res = await Promise.all(targets.map((p) =>
+      pushToProfile(db, p, { title: c.title, body: c.body, url: c.url, kind, tag: kind })));
     return res.filter(Boolean).length;
   };
 

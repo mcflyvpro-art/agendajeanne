@@ -24,6 +24,8 @@ function Me() {
   const [doneCount, setDoneCount] = useState(0);
   const [items, setItems] = useState<ChildItem[]>([]);
   const [pickAvatar, setPickAvatar] = useState(false);
+  const [badge, setBadge] = useState<Badge | null>(null);
+  const [allHistory, setAllHistory] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -32,9 +34,9 @@ function Me() {
       const [b, o, l, c, m, t, it] = await Promise.all([
         supabase.from('badges').select('*'),
         supabase.from('earned_badges').select('code').eq('child_id', profile.id),
-        supabase.from('ledger').select('*').eq('child_id', profile.id).order('created_at', { ascending: false }).limit(15),
+        supabase.from('ledger').select('*').eq('child_id', profile.id).order('created_at', { ascending: false }).limit(40),
         supabase.from('contracts').select('*').eq('child_id', profile.id).eq('week_start', weekStart(todayISO())).maybeSingle(),
-        supabase.from('messages').select('*').eq('to_id', profile.id).order('created_at', { ascending: false }).limit(8),
+        supabase.from('messages').select('*').eq('to_id', profile.id).order('created_at', { ascending: false }).limit(3),
         supabase.from('tasks').select('id', { count: 'exact', head: true }).eq('child_id', profile.id).eq('status', 'done'),
         supabase.from('child_items').select('*').eq('child_id', profile.id).order('acquired_at'),
       ]);
@@ -123,7 +125,7 @@ function Me() {
 
       {!!msgs.length && (
         <section>
-          <h2 className="mb-3 text-lg font-black text-ink">💬 Mes messages</h2>
+          <h2 className="mb-3 text-lg font-black text-ink">💬 Derniers messages</h2>
           <ul className="space-y-2.5">
           {msgs.map((m) => (
             <li key={m.id} className="card flex items-start gap-3 p-4">
@@ -146,12 +148,12 @@ function Me() {
           {badges.map((b) => {
             const has = owned.has(b.code);
             return (
-              <div key={b.code}
-                   className={clsx('tile flex flex-col items-center gap-1 px-1 py-3 text-center',
-                     has ? 'border-grape bg-grape-light' : 'opacity-40')}>
+              <button key={b.code} onClick={() => setBadge(b)}
+                   className={clsx('tile flex flex-col items-center gap-1 px-1 py-3 text-center no-select active:scale-95',
+                     has ? 'border-grape bg-grape-light' : 'opacity-45')}>
                 <span className="text-3xl">{has ? b.emoji : '🔒'}</span>
                 <span className="text-[9px] font-black leading-tight text-ink">{b.name}</span>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -159,9 +161,10 @@ function Me() {
 
       <section>
         <p className="mb-3 text-lg font-black text-ink">💰 Historique</p>
-        {ledger.length === 0 ? <Empty emoji="📜" title="Rien encore" /> : (
+        {ledger.length === 0 ? <Empty emoji="📜" title="Rien encore" hint="Tes gains et tes achats apparaîtront ici." /> : (
+          <>
           <ul className="card divide-y-2 divide-line overflow-hidden">
-            {ledger.map((l) => (
+            {(allHistory ? ledger : ledger.slice(0, 6)).map((l) => (
               <li key={l.id} className="flex items-center justify-between gap-3 px-4 py-3">
                 <div className="min-w-0">
                   <p className="truncate font-bold text-ink">{l.reason}</p>
@@ -175,10 +178,34 @@ function Me() {
               </li>
             ))}
           </ul>
+          {ledger.length > 6 && (
+            <button onClick={() => setAllHistory((v) => !v)} className="mt-3 w-full text-center text-sm font-black text-grape">
+              {allHistory ? 'Voir moins' : `Voir tout l’historique (${ledger.length})`}
+            </button>
+          )}
+          </>
         )}
       </section>
 
-      <button onClick={signOut} className="btn-plain w-full">Se déconnecter</button>
+      <button onClick={() => { if (confirm('Te déconnecter de l’app ?')) signOut(); }} className="btn-plain w-full">Se déconnecter</button>
+
+      <Sheet open={!!badge} onClose={() => setBadge(null)} title={badge?.name ?? ''}>
+        {badge && (
+          <div className="pb-4 text-center">
+            <div className={clsx('mx-auto grid h-24 w-24 place-items-center rounded-full text-5xl', owned.has(badge.code) ? 'bg-grape-light' : 'bg-soft grayscale')}>
+              {badge.emoji}
+            </div>
+            <p className="mt-4 text-lg font-extrabold text-ink">{badge.description}</p>
+            {badge.coins_reward > 0 && (
+              <p className="mt-2 font-black text-grape">+{badge.coins_reward} {settings.currency_emoji} à la clé</p>
+            )}
+            <p className={clsx('mt-4 inline-block rounded-full px-4 py-1.5 text-sm font-black',
+              owned.has(badge.code) ? 'bg-leaf-light text-leaf-dark' : 'bg-soft text-muted')}>
+              {owned.has(badge.code) ? '✅ Débloqué' : '🔒 Pas encore'}
+            </p>
+          </div>
+        )}
+      </Sheet>
 
       <Sheet open={pickAvatar} onClose={() => setPickAvatar(false)} title="Mes avatars">
         <div className="grid grid-cols-4 gap-3">

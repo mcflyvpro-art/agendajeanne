@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useApp } from '@/components/AppProvider';
 import { toast } from '@/components/ui';
+import { subscriptionsOf, withSubscription, type StoredSubscription } from '@/lib/push-subs';
 
 function urlB64ToUint8Array(base64: string) {
   const padding = '='.repeat((4 - (base64.length % 4)) % 4);
@@ -18,8 +19,24 @@ const isStandalone = () =>
 const isIOS = () =>
   typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent) && !(window as any).MSStream;
 
+/** Ajoute cet appareil à la liste du profil, relue juste avant pour ne rien écraser. */
+async function register(profileId: string, sub: PushSubscription) {
+  const { data } = await supabase.from('profiles').select('push_subscription').eq('id', profileId).single();
+  await supabase.from('profiles').update({
+    push_subscription: withSubscription(data?.push_subscription, sub.toJSON() as StoredSubscription),
+    push_enabled: true,
+    push_checked_at: new Date().toISOString(),
+  }).eq('id', profileId);
+}
+
+/**
+ * État des notifications de CET appareil. Un même compte peut être ouvert sur
+ * plusieurs téléphones (la PWA de Jeanne sur celui du parent, par exemple) :
+ * chacun s'inscrit à côté des autres. Un appareil sans notifications ne touche
+ * plus à rien — il désactivait auparavant les rappels du compte entier.
+ */
 export default function PushManager() {
-  const { profile, refresh } = useApp();
+  const { profile } = useApp();
   const [state, setState] = useState<'unknown' | 'ok' | 'need-install' | 'need-permission' | 'denied'>('unknown');
   const [busy, setBusy] = useState(false);
 
@@ -32,20 +49,16 @@ export default function PushManager() {
     if (Notification.permission === 'denied') { setState('denied'); return; }
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.getSubscription();
-    setState(sub && profile.push_enabled ? 'ok' : 'need-permission');
-  }, [profile]);
+    if (!sub || Notification.permission !== 'granted') { setState('need-permission'); return; }
+    setState('ok');
+    // Abonnement local inconnu du profil (purgé, renouvelé par le navigateur) ou
+    // compte marqué injoignable à tort par l'ancienne version : on le réinscrit.
+    if (!profile.push_enabled || !subscriptionsOf(profile.push_subscription).some((s) => s.endpoint === sub.endpoint)) {
+      await register(profile.id, sub);
+    }
+  }, [profile?.id, profile?.push_subscription, profile?.push_enabled]);
 
   useEffect(() => { check(); }, [check]);
-
-  useEffect(() => {
-    if (!profile || state === 'unknown') return;
-    const enabled = state === 'ok';
-    if (profile.push_enabled !== enabled) {
-      supabase.from('profiles')
-        .update({ push_enabled: enabled, push_checked_at: new Date().toISOString() })
-        .eq('id', profile.id).then(() => refresh());
-    }
-  }, [state, profile?.id]);
 
   const enable = async () => {
     setBusy(true);
@@ -53,42 +66,40 @@ export default function PushManager() {
       const perm = await Notification.requestPermission();
       if (perm !== 'granted') { setState('denied'); return; }
       const reg = await navigator.serviceWorker.ready;
-      let sub = await reg.pushManager.getSubscription();
-      if (!sub) {
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlB64ToUint8Array(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!),
-        });
-      }
-      await supabase.from('profiles')
-        .update({ push_subscription: sub.toJSON(), push_enabled: true, push_checked_at: new Date().toISOString() })
-        .eq('id', profile!.id);
+      const sub = (await reg.pushManager.getSubscription()) ?? await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlB64ToUint8Array(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!),
+      });
+      await register(profile!.id, sub);
       setState('ok');
-      await refresh();
       toast('Notifications activées');
-    } catch (e: any) {
+    } catch {
       toast('Échec de l’activation', 'err');
     } finally { setBusy(false); }
   };
 
   if (state === 'ok' || state === 'unknown') return null;
 
+  if (state === 'need-permission') {
+    return (
+      <div className="card flex items-center gap-3 border-sun/60 bg-sun-light p-3.5">
+        <span className="text-2xl">🔔</span>
+        <p className="flex-1 text-sm font-extrabold leading-snug text-ink">Active les rappels sur cet appareil</p>
+        <button onClick={enable} disabled={busy} className="btn-sun shrink-0 !px-4 !py-2.5 text-sm">
+          {busy ? '…' : 'Activer'}
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="card border-2 border-sun bg-sun-light p-4">
-      {state === 'need-install' ? (
-        <p className="text-sm font-extrabold text-ink">
-          📲 Partager → « Sur l’écran d’accueil », puis rouvrir depuis l’icône
-        </p>
-      ) : state === 'denied' ? (
-        <p className="text-sm font-extrabold text-ink">
-          🔕 Notifications bloquées {isIOS() ? '— Réglages → Notifications → Agenda' : '— paramètres du site → Notifications'}
-        </p>
-      ) : (
-        <>
-          <p className="text-center text-sm font-extrabold text-ink">🔔 Rappels désactivés</p>
-          <button onClick={enable} disabled={busy} className="btn-sun mt-3 w-full">Activer</button>
-        </>
-      )}
+    <div className="card flex items-start gap-3 border-sun/60 bg-sun-light p-3.5">
+      <span className="text-2xl">{state === 'need-install' ? '📲' : '🔕'}</span>
+      <p className="flex-1 text-sm font-bold leading-snug text-ink">
+        {state === 'need-install'
+          ? <>Pour recevoir les rappels : <b>Partager → Sur l’écran d’accueil</b>, puis ouvre l’app depuis l’icône.</>
+          : <>Notifications bloquées sur cet appareil. {isIOS() ? <b>Réglages → Notifications → Agenda</b> : <b>Paramètres du site → Notifications</b>}</>}
+      </p>
     </div>
   );
 }

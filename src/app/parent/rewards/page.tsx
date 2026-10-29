@@ -9,7 +9,7 @@ import { useLive } from '@/lib/useLive';
 import { AVATAR_CHOICES } from '@/lib/avatars';
 import { weekStart, todayISO } from '@/lib/dates';
 import { notify, resolveRedemption } from '@/lib/actions';
-import { Loader, Sheet, Empty, SegmentedTabs, NumberField, toast } from '@/components/ui';
+import { Loader, Sheet, Empty, SegmentedTabs, NumberField, PageHeader, SectionTitle, toast } from '@/components/ui';
 import type { Reward, Redemption, Contract } from '@/lib/types';
 
 export default function RewardsPage() { return <ParentShell><Rewards /></ParentShell>; }
@@ -95,7 +95,7 @@ function Rewards() {
 
   return (
     <main className="mx-auto max-w-lg px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
-      <h1 className="text-3xl font-black text-ink">Boutique</h1>
+      <PageHeader title="Boutique" subtitle="Récompenses et contrat" />
 
       <div className="mt-4">
         <SegmentedTabs value={tab} onChange={setTab} options={[
@@ -112,7 +112,7 @@ function Rewards() {
             if (!rows.length) return null;
             return (
               <section key={k} className="mt-6">
-                <h2 className="mb-3 text-lg font-black text-ink">{k === 'item' ? '🎭 Avatars' : '🎁 Récompenses'}</h2>
+                <SectionTitle>{k === 'item' ? '🎭 Avatars' : '🎁 Récompenses'}</SectionTitle>
                 <ul className="stagger space-y-3">
                   {rows.map((r) => (
                     <li key={r.id}>
