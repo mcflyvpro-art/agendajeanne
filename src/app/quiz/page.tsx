@@ -5,8 +5,8 @@ import ChildShell from '@/components/ChildShell';
 import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
 import { useLive } from '@/lib/useLive';
-import { Loader, Empty, Ring, toast } from '@/components/ui';
-import { checkBadges, notify } from '@/lib/actions';
+import { Loader, Empty, Ring, PageHeader, toast } from '@/components/ui';
+import { checkBadges, creditChild, notify } from '@/lib/actions';
 import { compressImage } from '@/lib/image';
 import { levelOf } from '@/lib/economy';
 import type { Quiz, QuizQuestion } from '@/lib/types';
@@ -14,20 +14,27 @@ import type { Quiz, QuizQuestion } from '@/lib/types';
 export default function QuizPage() { return <ChildShell><QuizHome /></ChildShell>; }
 
 function QuizHome() {
-  const { profile, settings, refresh } = useApp();
+  const { profile, settings, refresh, subjects } = useApp();
   const [list, setList] = useState<Quiz[]>([]);
   const [active, setActive] = useState<Quiz | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const [attempted, setAttempted] = useState<Set<string>>(new Set());
+  const [best, setBest] = useState<Record<string, number>>({});
 
   const load = useCallback(async () => {
     if (!profile) return;
     const [q, a] = await Promise.all([
       supabase.from('quizzes').select('*').eq('child_id', profile.id).order('created_at', { ascending: false }).limit(30),
-      supabase.from('quiz_attempts').select('quiz_id').eq('child_id', profile.id),
+      supabase.from('quiz_attempts').select('quiz_id,score,total').eq('child_id', profile.id),
     ]);
+    const scores: Record<string, number> = {};
+    for (const row of (a.data ?? []) as { quiz_id: string; score: number; total: number }[]) {
+      const pct = row.total ? Math.round((row.score / row.total) * 100) : 0;
+      scores[row.quiz_id] = Math.max(scores[row.quiz_id] ?? 0, pct);
+    }
+    setBest(scores);
     const rows = (q.data ?? []) as Quiz[];
     const attemptedSet = new Set((a.data ?? []).map((r: any) => r.quiz_id));
     // Ceux envoyés par les parents et jamais faits remontent en premier.
@@ -74,37 +81,59 @@ function QuizHome() {
 
   return (
     <main className="mx-auto max-w-lg px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
-      <h1 className="text-3xl font-black text-ink">Quiz 🧠</h1>
+      <PageHeader title="Quiz" subtitle="Réviser en jouant" />
 
       {settings.child_can_create_quiz && (
-        <label className={clsx('card mt-5 flex cursor-pointer flex-col items-center gap-3 border-[3px] border-dashed border-grape bg-grape-light px-6 py-10 text-center no-select',
-          busy && 'pointer-events-none opacity-60')}>
-          <span className={clsx('text-6xl', busy ? 'animate-bob' : '')}>{busy ? '✨' : '📸'}</span>
-          <span className="text-xl font-black text-grape">{busy ? 'Lecture…' : 'Photographier ma leçon'}</span>
+        <label className={clsx('card mt-4 flex cursor-pointer items-center gap-4 border-2 border-dashed border-grape/60 bg-grape-light p-4 no-select active:scale-[.99]',
+          busy && 'pointer-events-none')}>
+          <span className={clsx('grid h-16 w-16 shrink-0 place-items-center rounded-3xl bg-white text-4xl shadow-float', busy && 'animate-bob')}>
+            {busy ? '✨' : '📸'}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-lg font-black leading-tight text-grape">{busy ? 'Je prépare tes questions…' : 'Photographier ma leçon'}</span>
+            <span className="mt-0.5 block text-sm font-bold text-muted">
+              {busy ? 'Ça prend une quinzaine de secondes' : 'Un quiz est créé à partir de ta photo'}
+            </span>
+          </span>
           <input type="file" accept="image/*" capture="environment" className="hidden" disabled={busy}
                  onChange={(e) => { const f = e.target.files?.[0]; if (f) create(f); e.target.value = ''; }} />
         </label>
       )}
 
       {list.length === 0 ? (
-        <div className="mt-6"><Empty emoji="📚" title="Aucun quiz" /></div>
+        <div className="mt-6"><Empty emoji="📚" title="Aucun quiz" hint="Photographie une leçon pour créer ton premier quiz." /></div>
       ) : (
-        <ul className="stagger mt-6 space-y-3">
-          {list.map((q) => (
-            <li key={q.id}>
-              <button onClick={() => setActive(q)} className="card flex w-full items-center gap-3 p-4 text-left no-select active:scale-[.98]">
-                <span className="text-3xl">{q.source === 'parent' ? '👪' : '📘'}</span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-extrabold text-ink">{q.title}</p>
-                  <p className="text-xs font-bold text-muted">
-                    {(q.questions as QuizQuestion[]).length} questions
-                    {q.source === 'parent' && !attempted.has(q.id) && ' · nouveau'}
-                  </p>
-                </div>
-                <span className="text-2xl">▶️</span>
-              </button>
-            </li>
-          ))}
+        <ul className="stagger mt-5 space-y-2.5">
+          {list.map((q) => {
+            const subject = subjects.find((x) => x.name === q.subject);
+            const isNew = q.source === 'parent' && !attempted.has(q.id);
+            const score = best[q.id];
+            return (
+              <li key={q.id}>
+                <button onClick={() => setActive(q)}
+                        className={clsx('card flex w-full items-center gap-3 p-4 text-left no-select active:scale-[.98]', isNew && 'border-2 border-grape')}>
+                  <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl text-2xl"
+                        style={{ background: `${subject?.color ?? '#7C4DEE'}22` }}>
+                    {subject?.emoji ?? '📘'}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-extrabold text-ink">{q.title}</p>
+                    <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs font-bold text-muted">
+                      <span>{(q.questions as QuizQuestion[]).length} questions</span>
+                      {q.source === 'parent' && <span>· de tes parents</span>}
+                    </p>
+                  </div>
+                  {isNew ? <span className="shrink-0 rounded-full bg-grape px-2.5 py-1 text-[11px] font-black text-white">Nouveau</span>
+                    : score !== undefined ? (
+                      <span className={clsx('shrink-0 rounded-full px-2.5 py-1 text-xs font-black',
+                        score === 100 ? 'bg-leaf-light text-leaf-dark' : score >= 50 ? 'bg-sun-light text-sun-dark' : 'bg-flame-light text-flame-dark')}>
+                        {score}%
+                      </span>
+                    ) : <span className="shrink-0 text-xl">▶️</span>}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </main>
@@ -119,7 +148,7 @@ function Play({ quiz, onExit }: { quiz: Quiz; onExit: () => void }) {
   const [reveal, setReveal] = useState(false);
   const [answers, setAnswers] = useState<number[]>([]);
   const [over, setOver] = useState(false);
-  const [earned, setEarned] = useState({ coins: 0, xp: 0 });
+  const [earned, setEarned] = useState<{ coins: number; xp: number; practice?: boolean } | null>(null);
 
   const q = qs[i];
 
@@ -131,12 +160,18 @@ function Play({ quiz, onExit }: { quiz: Quiz; onExit: () => void }) {
     if (i + 1 < qs.length) { setI(i + 1); return; }
 
     const score = acc.filter((a, k) => a === qs[k].answer).length;
-    const coins = score * (settings?.quiz_coins_per_answer ?? 3);
-    const xp = score * (settings?.xp_per_quiz_answer ?? 5);
-    setEarned({ coins, xp });
     setOver(true);
 
     if (profile) {
+      // Seul le premier essai rapporte : les réponses ayant été montrées, un
+      // quiz refait aussitôt permettait de gagner des points à l'infini.
+      const { count } = await supabase.from('quiz_attempts').select('id', { count: 'exact', head: true })
+        .eq('quiz_id', quiz.id).eq('child_id', profile.id);
+      const first = !count;
+      const coins = first ? score * (settings?.quiz_coins_per_answer ?? 3) : 0;
+      const xp = first ? score * (settings?.xp_per_quiz_answer ?? 5) : 0;
+      setEarned({ coins, xp, practice: !first });
+
       await supabase.from('quiz_attempts').insert({
         quiz_id: quiz.id, child_id: profile.id, answers: acc, score, total: qs.length, coins_earned: coins,
       });
@@ -145,14 +180,17 @@ function Play({ quiz, onExit }: { quiz: Quiz; onExit: () => void }) {
           child_id: profile.id, amount: coins, reason: `Quiz : ${quiz.title}`, kind: 'quiz', ref_id: quiz.id,
         });
       }
-      const newXp = profile.xp + xp;
-      const before = levelOf(profile.xp, settings!.xp_per_level).level;
-      const after = levelOf(newXp, settings!.xp_per_level).level;
-      await supabase.from('profiles').update({
-        coins: profile.coins + coins, xp: newXp, level_reached: after,
-      }).eq('id', profile.id);
-      if (after > before) notify('level_up', { level: after });
-      await checkBadges(profile.id, profile.streak_current, after);
+      if (!first) return;
+      // Addition faite sur le solde relu en base, pas sur la copie en mémoire.
+      const up = await creditChild(profile.id, coins, xp);
+      const total = up?.xp ?? profile.xp + xp;
+      const before = levelOf(total - xp, settings!.xp_per_level).level;
+      const after = levelOf(total, settings!.xp_per_level).level;
+      if (after > before) {
+        await supabase.from('profiles').update({ level_reached: after }).eq('id', profile.id);
+        notify('level_up', { level: after });
+      }
+      await checkBadges(profile.id, up?.streak_current ?? profile.streak_current, after);
       notify('quiz_done', { title: quiz.title, score, total: qs.length });
     }
   };
@@ -167,10 +205,21 @@ function Play({ quiz, onExit }: { quiz: Quiz; onExit: () => void }) {
           <div className="text-lg font-bold text-muted">sur {qs.length}</div>
         </Ring>
         <p className="mt-6 text-6xl">{pct === 100 ? '🏆' : pct >= 70 ? '🎉' : pct >= 40 ? '💪' : '📖'}</p>
-        <p className="mt-4 text-3xl font-black text-grape">+{earned.coins} {settings?.currency_emoji}</p>
-        <p className="mt-1 text-xl font-extrabold text-sun-dark">+{earned.xp} XP</p>
+        <p className="mt-2 text-xl font-black text-ink">
+          {pct === 100 ? 'Sans faute !' : pct >= 70 ? 'Très bien !' : pct >= 40 ? 'Pas mal, continue' : 'Relis ta leçon et retente'}
+        </p>
+        {!earned ? <div className="mt-6 h-16" /> : earned.practice ? (
+          <p className="mt-5 rounded-3xl bg-soft px-5 py-3 text-sm font-bold text-muted">
+            Entraînement : les points ne comptent qu’au premier essai.
+          </p>
+        ) : (
+          <>
+            <p className="mt-4 text-3xl font-black text-grape">+{earned.coins} {settings?.currency_emoji}</p>
+            <p className="mt-1 text-xl font-extrabold text-sun-dark">+{earned.xp} XP</p>
+          </>
+        )}
         <div className="mt-8 flex w-full gap-2.5">
-          <button onClick={() => { setI(0); setAnswers([]); setOver(false); setPicked(null); setReveal(false); }}
+          <button onClick={() => { setI(0); setAnswers([]); setOver(false); setPicked(null); setReveal(false); setEarned(null); }}
                   className="btn-plain flex-1">🔄 Refaire</button>
           <button onClick={onExit} className="btn-grape flex-1">Terminer</button>
         </div>

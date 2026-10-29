@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { admin } from '@/lib/admin';
-import { sendPush } from '@/lib/push';
+import { pushToProfile } from '@/lib/push';
+import { PROOF_BUCKET, proofPath } from '@/lib/proofs';
 import { notifCopy, parentCopy } from '@/lib/tone';
 import { todayISO, addDaysISO, nowMinutes, toMinutes, hhmm, dowOf } from '@/lib/dates';
 import type { Profile, Settings, Task, Routine } from '@/lib/types';
@@ -43,13 +44,19 @@ async function run(req: Request) {
 
   /** Envoie et nettoie l'abonnement s'il est mort. */
   const push = async (p: Profile, c: { title: string; body: string }, kind: string, url = '/') => {
-    const r = await sendPush(p.push_subscription, { ...c, kind, url, tag: kind });
-    if (r.gone) await db.from('profiles').update({ push_enabled: false, push_subscription: null }).eq('id', p.id);
-    if (r.ok) log.push(`${kind}→${p.display_name}`);
-    return r.ok;
+    const ok = await pushToProfile(db, p, { ...c, kind, url, tag: kind });
+    if (ok) log.push(`${kind}→${p.display_name}`);
+    return ok;
   };
   const pushParents = (c: { title: string; body: string }, kind: string, url = '/parent') =>
     Promise.all(parents.map((p) => push(p, c, kind, url)));
+
+  /** Range une alerte dans la boîte aux lettres de chaque parent. */
+  const mailParents = async (emoji: string, body: string, taskId: string | null = null) => {
+    if (parents.length) {
+      await db.from('messages').insert(parents.map((p) => ({ to_id: p.id, task_id: taskId, kind: 'alert', emoji, body })));
+    }
+  };
 
   /** Le parent et l'enfant choisissent chacun ce qu'ils reçoivent. */
   const wantsParent = (k: string) => (s.notif_parent as any)?.[k] !== false;
@@ -123,10 +130,7 @@ async function run(req: Request) {
         await pushParents(parentCopy.notStarted(child.display_name, t.title, now - start), 'alert');
       }
       await db.from('tasks').update({ parent_alerted: true }).eq('id', t.id);
-      await db.from('messages').insert({
-        to_id: parents[0]?.id, task_id: t.id, kind: 'alert', emoji: '🔴',
-        body: `${child.display_name} n'a pas commencé « ${t.title} » (${now - start} min de retard).`,
-      });
+      await mailParents('⏰', `${child.display_name} n'a pas commencé « ${t.title} » (${now - start} min de retard)`, t.id);
     }
   }
 
@@ -166,18 +170,48 @@ async function run(req: Request) {
         count: done.length, coins, currency: s.currency_emoji, streak: child.streak_current,
       }, seed), 'recap', '/me');
     }
-    if (wantsParent('recap')) await pushParents({
-      title: `📊 Bilan de ${child.display_name}`,
-      body: `${done.length}/${tasks.filter((t) => t.status !== 'skipped').length} tâches · ${coins} ${s.currency_emoji} · série ${child.streak_current} j`,
-    }, 'recap');
+    if (wantsParent('recap')) {
+      const recap = `${done.length}/${tasks.filter((t) => t.status !== 'skipped').length} tâches · ${coins} ${s.currency_emoji} · série ${child.streak_current} j`;
+      await pushParents({ title: `📊 Bilan de ${child.display_name}`, body: recap }, 'recap');
+      await mailParents('📊', `Bilan du jour : ${recap}`);
+    }
   }
 
   // Alerte si l'enfant a coupé ses notifications
   if (!child.push_enabled && await once(`pushoff-${today}`)) {
     await pushParents(parentCopy.pushOff(child.display_name), 'alert');
+    await mailParents('🔕', `${child.display_name} ne reçoit plus les rappels sur son téléphone`);
   }
 
+  // ------------------------------------------------- 5. ménage des photos
+  if (await once(`proofs-${today}`)) log.push(`photos:${await purgeProofs(db, child.id)}`);
+
   return NextResponse.json({ ok: true, at: `${today} ${hhmm(String(Math.floor(now / 60)).padStart(2, '0') + ':' + String(now % 60).padStart(2, '0'))}`, log });
+}
+
+/**
+ * Supprime les photos qui ne servent plus : celles des tâches déjà validées
+ * ou renvoyées (normalement effacées à ce moment-là) et les orphelines d'un
+ * envoi interrompu. Seules les photos en attente de validation sont gardées,
+ * ainsi que celles de moins d'un jour pour ne pas gêner un envoi en cours.
+ */
+async function purgeProofs(db: ReturnType<typeof admin>, childId: string): Promise<number> {
+  const { data: waiting } = await db.from('tasks').select('proof_url')
+    .eq('child_id', childId).eq('status', 'submitted').not('proof_url', 'is', null);
+  const keep = new Set((waiting ?? []).map((t: any) => proofPath(t.proof_url)).filter(Boolean));
+
+  const { data: files } = await db.storage.from(PROOF_BUCKET).list(childId, { limit: 1000 });
+  const dayAgo = Date.now() - 86400000;
+  const doomed = (files ?? [])
+    .filter((f: any) => f.name && !f.name.startsWith('.'))
+    .map((f: any) => ({ path: `${childId}/${f.name}`, at: new Date(f.created_at ?? 0).getTime() }))
+    .filter((f) => !keep.has(f.path) && f.at < dayAgo)
+    .map((f) => f.path);
+  if (doomed.length) await db.storage.from(PROOF_BUCKET).remove(doomed);
+
+  await db.from('tasks').update({ proof_url: null })
+    .eq('child_id', childId).neq('status', 'submitted').not('proof_url', 'is', null);
+  return doomed.length;
 }
 
 /** Crée les tâches manquantes à partir des routines, sur `days` jours. */

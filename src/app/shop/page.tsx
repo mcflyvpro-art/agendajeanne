@@ -5,7 +5,7 @@ import ChildShell from '@/components/ChildShell';
 import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
 import { useLive } from '@/lib/useLive';
-import { Loader, Sheet, Empty, toast } from '@/components/ui';
+import { Loader, Sheet, Empty, Bar, PageHeader, SectionTitle, toast } from '@/components/ui';
 import * as A from '@/lib/actions';
 import type { Reward, Redemption, ChildItem } from '@/lib/types';
 
@@ -48,7 +48,13 @@ function Shop() {
   const buy = async (r: Reward) => {
     setBusy(true);
     try {
-      if (profile.coins < r.cost) throw new Error('Pas assez');
+      const avatar = r.kind === 'item' && (r.item_type ?? 'avatar') === 'avatar' ? (r.item_value ?? r.emoji) : null;
+      // Débit d'abord, vérifié en base : le solde affiché peut dater d'avant un
+      // mouvement fait sur l'autre appareil. Remboursé si la suite échoue.
+      const paid = await A.creditChild(profile.id, -r.cost, 0, {
+        requireFunds: true, set: avatar ? { avatar_emoji: avatar } : undefined,
+      });
+      if (!paid) throw new Error('Pas assez');
 
       if (r.kind === 'item') {
         // Objet : débloqué tout de suite, sans validation.
@@ -56,23 +62,25 @@ function Shop() {
           child_id: profile.id, reward_id: r.id,
           item_type: r.item_type ?? 'avatar', item_value: r.item_value ?? r.emoji,
         });
-        if (error) throw new Error('Tu l’as déjà');
+        if (error) {
+          await A.creditChild(profile.id, r.cost, 0, { set: avatar ? { avatar_emoji: profile.avatar_emoji } : undefined });
+          throw new Error('Tu l’as déjà');
+        }
         await supabase.from('ledger').insert({
           child_id: profile.id, amount: -r.cost, reason: r.name, kind: 'reward',
         });
-        await supabase.from('profiles').update({
-          coins: profile.coins - r.cost,
-          avatar_emoji: (r.item_type ?? 'avatar') === 'avatar' ? (r.item_value ?? r.emoji) : profile.avatar_emoji,
-        }).eq('id', profile.id);
         toast('Débloqué !');
       } else {
-        await supabase.from('redemptions').insert({
+        const { error } = await supabase.from('redemptions').insert({
           reward_id: r.id, child_id: profile.id, reward_name: r.name, reward_emoji: r.emoji, cost_paid: r.cost,
         });
+        if (error) {
+          await A.creditChild(profile.id, r.cost);
+          throw new Error('Demande non envoyée, réessaie');
+        }
         await supabase.from('ledger').insert({
           child_id: profile.id, amount: -r.cost, reason: r.name, kind: 'reward',
         });
-        await supabase.from('profiles').update({ coins: profile.coins - r.cost }).eq('id', profile.id);
         A.notify('purchase', { reward: r.name, cost: r.cost });
         toast('Demande envoyée');
       }
@@ -85,27 +93,66 @@ function Shop() {
   const pending = history.filter((h) => h.status === 'pending');
   const settled = history.filter((h) => h.status !== 'pending');
 
+  // L'objectif le plus proche, pour donner une raison concrète de continuer.
+  const target = actions.filter((r) => r.cost > profile.coins).sort((a, b) => a.cost - b.cost)[0];
+
   return (
     <main className="mx-auto max-w-lg px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
-      <div className="card flex items-center justify-between p-5">
-        <div>
-          <p className="text-5xl font-black text-grape">{profile.coins}</p>
-          <p className="mt-1 font-extrabold text-muted">{settings.currency_name}</p>
+      <PageHeader title="Boutique" />
+
+      <div className="card mt-4 overflow-hidden">
+        <div className="flex items-center justify-between bg-gradient-to-br from-grape to-rose p-5 text-white">
+          <div>
+            <p className="text-xs font-black uppercase tracking-wide text-white/75">Mon solde</p>
+            <p className="text-5xl font-black tabular-nums">{profile.coins}</p>
+            <p className="font-extrabold text-white/80">{settings.currency_name}</p>
+          </div>
+          <span className="animate-bob text-6xl drop-shadow">{settings.currency_emoji}</span>
         </div>
-        <span className="animate-bob text-6xl">{settings.currency_emoji}</span>
+        {target && (
+          <div className="p-4">
+            <div className="mb-2 flex items-center justify-between gap-3 text-sm font-extrabold">
+              <span className="truncate text-ink">{target.emoji} Prochain objectif : {target.name}</span>
+              <span className="shrink-0 text-muted">encore {target.cost - profile.coins}</span>
+            </div>
+            <Bar pct={(profile.coins / target.cost) * 100} color="#7C4DEE" height={10} />
+          </div>
+        )}
       </div>
 
+      <section className="mt-6">
+        <SectionTitle>🎁 Récompenses</SectionTitle>
+        {actions.length === 0 ? <Empty emoji="🎁" title="Rien pour l’instant" hint="Tes parents peuvent en ajouter." /> : (
+          <div className="grid grid-cols-2 gap-3">
+            {actions.map((r) => {
+              const ok = profile.coins >= r.cost;
+              return (
+                <button key={r.id} onClick={() => setPicked(r)}
+                        className={clsx('tile flex flex-col p-4 text-left no-select active:scale-95', !ok && 'bg-soft/60')}>
+                  <div className={clsx('text-4xl', !ok && 'opacity-60')}>{r.emoji}</div>
+                  <p className={clsx('mt-2 flex-1 font-extrabold leading-snug', ok ? 'text-ink' : 'text-ink/60')}>{r.name}</p>
+                  <p className={clsx('mt-2 text-lg font-black', ok ? 'text-grape' : 'text-muted')}>
+                    {ok ? '' : '🔒 '}{r.cost} {settings.currency_emoji}
+                  </p>
+                  {!ok && <Bar pct={(profile.coins / r.cost) * 100} color="#B9A6F2" height={6} className="mt-2" />}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
       {!!items.length && (
-        <section className="mt-6">
-          <h2 className="mb-3 text-lg font-black text-ink">🎭 Avatars à débloquer</h2>
-          <div className="grid grid-cols-3 gap-3">
+        <section className="mt-7">
+          <SectionTitle>🎭 Avatars</SectionTitle>
+          <div className="grid grid-cols-4 gap-2.5">
             {items.map((r) => {
               const ok = profile.coins >= r.cost;
               return (
                 <button key={r.id} onClick={() => setPicked(r)}
-                        className={clsx('tile p-3 text-center no-select active:scale-95', !ok && 'opacity-50')}>
-                  <div className="text-4xl">{r.item_value ?? r.emoji}</div>
-                  <p className={clsx('mt-1.5 text-xs font-black', ok ? 'text-ink' : 'text-muted')}>
+                        className={clsx('tile px-1 py-3 text-center no-select active:scale-95', !ok && 'bg-soft/60')}>
+                  <div className={clsx('text-4xl', !ok && 'opacity-60')}>{r.item_value ?? r.emoji}</div>
+                  <p className={clsx('mt-1.5 text-xs font-black', ok ? 'text-grape' : 'text-muted')}>
                     {ok ? '' : '🔒 '}{r.cost}
                   </p>
                 </button>
@@ -115,30 +162,9 @@ function Shop() {
         </section>
       )}
 
-      <section className="mt-7">
-        <h2 className="mb-3 text-lg font-black text-ink">🎁 Récompenses</h2>
-        {actions.length === 0 ? <Empty emoji="🎁" title="Rien pour l’instant" /> : (
-          <div className="grid grid-cols-2 gap-3">
-            {actions.map((r) => {
-              const ok = profile.coins >= r.cost;
-              return (
-                <button key={r.id} onClick={() => setPicked(r)}
-                        className={clsx('tile p-4 text-left no-select active:scale-95', !ok && 'opacity-50')}>
-                  <div className="text-4xl">{r.emoji}</div>
-                  <p className="mt-2 font-extrabold leading-snug text-ink">{r.name}</p>
-                  <p className={clsx('mt-2 text-lg font-black', ok ? 'text-grape' : 'text-muted')}>
-                    {ok ? '' : '🔒 '}{r.cost} {settings.currency_emoji}
-                  </p>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
       {!!pending.length && (
         <section className="mt-7">
-          <h2 className="mb-3 text-lg font-black text-ink">⏳ En attente</h2>
+          <SectionTitle>⏳ En attente de tes parents</SectionTitle>
           <ul className="space-y-2.5">
             {pending.map((h) => <HistoryRow key={h.id} h={h} />)}
           </ul>
@@ -147,9 +173,9 @@ function Shop() {
 
       {!!settled.length && (
         <section className="mt-7">
-          <h2 className="mb-3 text-lg font-black text-ink">📜 Déjà demandé</h2>
+          <SectionTitle>📜 Déjà demandé</SectionTitle>
           <ul className="space-y-2.5">
-            {settled.map((h) => <HistoryRow key={h.id} h={h} />)}
+            {settled.slice(0, 5).map((h) => <HistoryRow key={h.id} h={h} />)}
           </ul>
         </section>
       )}

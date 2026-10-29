@@ -2,19 +2,80 @@
 import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 
+/**
+ * Chargement. Une attente silencieuse paraît une panne : passé quelques
+ * secondes on dit ce qui se passe, puis on propose de recharger.
+ */
 export function Loader() {
+  const [slow, setSlow] = useState(0);
+  useEffect(() => {
+    const a = setTimeout(() => setSlow(1), 4000);
+    const b = setTimeout(() => setSlow(2), 20000);
+    return () => { clearTimeout(a); clearTimeout(b); };
+  }, []);
   return (
-    <div className="flex min-h-[60vh] items-center justify-center">
+    <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-8 text-center">
       <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-line border-t-grape" />
+      {slow > 0 && (
+        <p className="animate-rise text-sm font-bold text-muted">
+          {slow === 1 ? 'Connexion au serveur…' : 'Le serveur met du temps à répondre.'}
+        </p>
+      )}
+      {slow > 1 && <button onClick={() => location.reload()} className="btn-plain animate-rise text-sm">Recharger</button>}
     </div>
   );
 }
 
-export function Empty({ emoji, title }: { emoji: string; title: string }) {
+/** Titre de page, identique partout. */
+export function PageHeader({ title, subtitle, right }: { title: string; subtitle?: React.ReactNode; right?: React.ReactNode }) {
   return (
-    <div className="card flex flex-col items-center gap-3 px-6 py-12 text-center">
+    <header className="flex items-end justify-between gap-3">
+      <div className="min-w-0">
+        {subtitle && <p className="text-xs font-black uppercase tracking-wide text-muted">{subtitle}</p>}
+        <h1 className="truncate text-[32px] font-black leading-tight text-ink">{title}</h1>
+      </div>
+      {right && <div className="flex shrink-0 items-center gap-2 pb-1">{right}</div>}
+    </header>
+  );
+}
+
+/** Intertitre de section. */
+export function SectionTitle({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) {
+  return (
+    <div className="mb-3 flex items-center justify-between gap-3">
+      <h2 className="text-lg font-black text-ink">{children}</h2>
+      {right}
+    </div>
+  );
+}
+
+/** Photo en plein écran, fermée d'un tap. */
+export function Lightbox({ src, onClose }: { src: string | null; onClose: () => void }) {
+  useEffect(() => {
+    if (!src) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [src, onClose]);
+  if (!src) return null;
+  return (
+    <div className="fixed inset-0 z-[80] flex animate-[pop_.2s_ease-out] items-center justify-center bg-ink/90 p-3"
+         onClick={onClose} role="dialog" aria-label="Photo">
+      <img src={src} alt="" className="max-h-full max-w-full rounded-3xl object-contain shadow-lift" />
+      <button aria-label="Fermer" onClick={onClose}
+              className="absolute right-4 grid h-11 w-11 place-items-center rounded-full bg-white/15 text-xl font-black text-white backdrop-blur"
+              style={{ top: 'calc(env(safe-area-inset-top) + 1rem)' }}>✕</button>
+    </div>
+  );
+}
+
+export function Empty({ emoji, title, hint, action }: { emoji: string; title: string; hint?: string; action?: React.ReactNode }) {
+  return (
+    <div className="card flex flex-col items-center gap-2 px-6 py-10 text-center">
       <span className="animate-bob text-6xl">{emoji}</span>
-      <p className="text-lg font-extrabold text-ink">{title}</p>
+      <p className="mt-1 text-lg font-extrabold text-ink">{title}</p>
+      {hint && <p className="max-w-[260px] text-sm font-semibold text-muted">{hint}</p>}
+      {action && <div className="mt-3">{action}</div>}
     </div>
   );
 }
@@ -112,7 +173,7 @@ export function Ring({ pct, size = 200, stroke = 16, color = '#7C4DEE', track = 
   const c = 2 * Math.PI * r;
   return (
     <div className="relative grid place-items-center" style={{ width: size, height: size }}>
-      <svg width={size} height={size} className="ring absolute inset-0">
+      <svg width={size} height={size} className="progress-ring absolute inset-0">
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={track} strokeWidth={stroke} />
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
                 strokeLinecap="round" strokeDasharray={c}

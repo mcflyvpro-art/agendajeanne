@@ -17,6 +17,7 @@ Next.js 15 · Supabase · Web Push (VAPID) · déploiement Vercel.
 Dans **Supabase → SQL Editor**, colle et exécute `supabase/schema.sql`.
 Le script est idempotent : tables, RLS, badges, matières, récompenses de départ
 et buckets de stockage. Les profils des comptes `jeanne@` et `virginie@` sont créés au passage.
+Exécute ensuite, dans l'ordre, `v2.sql` à `v7.sql` (idempotents eux aussi).
 
 ### 2. Variables d'environnement
 

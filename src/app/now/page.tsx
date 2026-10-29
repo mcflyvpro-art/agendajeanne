@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import clsx from 'clsx';
 import ChildShell from '@/components/ChildShell';
@@ -10,7 +10,7 @@ import { useLive } from '@/lib/useLive';
 import { useTaskTimer } from '@/lib/useTimer';
 import { supabase } from '@/lib/supabase';
 import { todayISO, hhmm, humanDuration, fromMinutes, toMinutes, nowMinutes } from '@/lib/dates';
-import { minTimerSeconds, requiresPhoto, requiresValidation, progressOf, levelOf, xpToday } from '@/lib/economy';
+import { progressOf, levelOf, xpToday } from '@/lib/economy';
 import { MOOD_SCALE, MOOD_SPECIAL } from '@/lib/mood';
 import { REACTIONS, reactionEmoji } from '@/lib/reactions';
 import * as A from '@/lib/actions';
@@ -24,7 +24,7 @@ function Now() {
   const today = todayISO();
   const { tasks, loading, reload } = useDay(profile?.id, today);
   const [fire, setFire] = useState(0);
-  const [award, setAward] = useState<A.AwardResult | null>(null);
+  const [award, setAward] = useState<Task | null>(null);
 
   const current = useMemo(
     () => tasks.find((t) => t.status === 'doing') ?? tasks.find((t) => t.status === 'todo') ?? null,
@@ -33,14 +33,24 @@ function Now() {
 
   useLive(['messages', 'rewards', 'contracts', 'profiles'], refresh, 'now');
 
+  // Les points arrivent quand le parent valide : on fête ce moment-là, en
+  // direct, plutôt qu'à l'envoi où rien n'est encore gagné.
+  const seen = useRef<Map<string, Task['status']>>(new Map());
+  useEffect(() => {
+    for (const t of tasks) {
+      const before = seen.current.get(t.id);
+      if (before === 'submitted' && t.status === 'done') { setFire((n) => n + 1); setAward(t); }
+      if (before === 'submitted' && t.status === 'todo') toast(`↩️ À refaire : ${t.title}`, 'err');
+      seen.current.set(t.id, t.status);
+    }
+  }, [tasks]);
+
   if (loading || !settings || !profile) return <Loader />;
   const prog = progressOf(tasks);
 
-  const onDone = async (a: A.AwardResult | null) => {
+  const onDone = async () => {
     await Promise.all([reload(), refresh()]);
-    if (!a) { toast('Envoyé à tes parents'); return; }
-    setFire((n) => n + 1);
-    setAward(a);
+    toast('Envoyé à tes parents 👀');
   };
 
   return (
@@ -48,15 +58,18 @@ function Now() {
       <Confetti fire={fire} />
       <Header xp={xpToday(tasks)} prog={prog} />
 
-      <div className="mt-5 space-y-4">
+      {/* La tâche du moment passe avant tout le reste : c'est la seule chose
+          à faire en ouvrant l'app, son bouton doit être visible sans défiler. */}
+      <div className="mt-4 space-y-4">
         <PushManager />
-        <MoodRow />
-        <AssignedQuizCard />
         {current ? (
           current.status === 'doing'
             ? <Focus task={current} onDone={onDone} />
             : <Next task={current} onChanged={reload} />
         ) : <AllDone done={prog.done} />}
+        <Waiting tasks={tasks} />
+        <AssignedQuizCard />
+        <MoodRow />
         <Queue tasks={tasks} currentId={current?.id} onChanged={reload} />
       </div>
 
@@ -66,6 +79,11 @@ function Now() {
 }
 
 /* ------------------------------------------------------------------ entête */
+function greeting() {
+  const m = nowMinutes();
+  return m < 18 * 60 ? (m < 12 * 60 ? 'Bonjour' : 'Bon après-midi') : 'Bonsoir';
+}
+
 function Header({ xp, prog }: { xp: number; prog: { done: number; total: number; pct: number } }) {
   const { profile, settings } = useApp();
   if (!profile || !settings) return null;
@@ -76,41 +94,50 @@ function Header({ xp, prog }: { xp: number; prog: { done: number; total: number;
   return (
     <header>
       <div className="flex items-center gap-3">
-        <div className="grid h-14 w-14 shrink-0 place-items-center rounded-3xl bg-grape-light text-3xl">
+        <Link href="/me" aria-label="Mon profil"
+              className="grid h-14 w-14 shrink-0 place-items-center rounded-3xl bg-grape-light text-3xl shadow-float press">
           {profile.avatar_emoji}
-        </div>
+        </Link>
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-2xl font-black text-ink">{profile.display_name}</h1>
-          <p className="text-sm font-bold text-grape">Niveau {lvl.level} · {lvl.title}</p>
+          <p className="text-xs font-black uppercase tracking-wide text-muted">{greeting()}</p>
+          <h1 className="truncate text-2xl font-black leading-tight text-ink">{profile.display_name}</h1>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Inbox />
-          {profile.streak_current > 0 && (
-            <span className="chip !border-sun !bg-sun-light !text-sun-dark">🔥 {profile.streak_current}</span>
-          )}
-          <Link href="/shop" className="chip !border-grape !bg-grape-light !text-grape">
-            {settings.currency_emoji} {profile.coins}
-          </Link>
-        </div>
+        <Inbox />
+        <Link href="/shop" aria-label="Mon solde"
+              className="flex h-10 shrink-0 items-center gap-1.5 rounded-full border-2 border-grape/25 bg-card px-3.5 text-base font-black text-grape shadow-float press">
+          <span>{settings.currency_emoji}</span><span className="tabular-nums">{profile.coins}</span>
+        </Link>
       </div>
 
-      <div className="mt-4 flex gap-3">
-        <div className="tile flex-1 p-3.5">
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="text-xs font-extrabold text-ink">⚡ {xp} / {goal} XP</span>
-            <span className="text-xs font-bold text-muted">{goalPct}%</span>
-          </div>
-          <Bar pct={goalPct} color="#F5A524" height={12} />
+      <section className="card mt-4 p-4">
+        <div className="flex items-center justify-between gap-2">
+          <Link href="/road" className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-grape-light px-3 py-1.5 text-xs font-black text-grape press">
+            <span>⭐ Niveau {lvl.level}</span><span className="truncate font-extrabold opacity-80">· {lvl.title}</span><span>›</span>
+          </Link>
+          {profile.streak_current > 0 && (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sun-light px-3 py-1.5 text-xs font-black text-sun-dark">
+              🔥 {profile.streak_current} {profile.streak_current > 1 ? 'jours' : 'jour'}
+            </span>
+          )}
         </div>
-        <div className="tile flex-1 p-3.5">
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="text-xs font-extrabold text-ink">✅ {prog.done} / {prog.total}</span>
-            <span className="text-xs font-bold text-muted">{prog.pct}%</span>
-          </div>
-          <Bar pct={prog.pct} color={prog.pct === 100 ? '#1FC08A' : '#7C4DEE'} height={12} />
+        <div className="mt-3.5 space-y-3">
+          <Progress label={<>⚡ <b className="text-ink">{xp}</b> / {goal} XP</>} pct={goalPct} color="#F5A524" />
+          <Progress label={<>✅ <b className="text-ink">{prog.done}</b> / {prog.total} tâches</>} pct={prog.pct}
+                    color={prog.pct === 100 ? '#1FC08A' : '#7C4DEE'} />
         </div>
-      </div>
+      </section>
     </header>
+  );
+}
+
+function Progress({ label, pct, color }: { label: React.ReactNode; pct: number; color: string }) {
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between text-xs font-bold text-muted">
+        <span>{label}</span><span className="tabular-nums">{pct}%</span>
+      </div>
+      <Bar pct={pct} color={color} height={10} />
+    </div>
   );
 }
 
@@ -157,7 +184,7 @@ function Inbox() {
   return (
     <>
       <button onClick={openInbox} aria-label="Messages" className="relative no-select active:scale-90">
-        <span className="grid h-9 w-9 place-items-center rounded-full bg-card text-xl shadow-float">💌</span>
+        <span className="grid h-10 w-10 place-items-center rounded-full bg-card text-xl shadow-float">💌</span>
         {unread > 0 && (
           <span className="absolute -right-1 -top-1 grid h-5 min-w-[20px] place-items-center rounded-full bg-flame px-1 text-[11px] font-black text-white">
             {unread}
@@ -263,14 +290,16 @@ function MoodRow() {
   return (
     <section className="card p-4">
       <div className="flex items-center justify-between">
-        <p className="text-base font-extrabold text-ink">Comment tu te sens ?</p>
-        <button onClick={() => setMore((m) => !m)} aria-label="Plus d’humeurs"
-                className="text-2xl no-select active:scale-90">{more ? '➖' : '➕'}</button>
+        <p className="font-extrabold text-ink">Comment tu te sens ?</p>
+        <button onClick={() => setMore((m) => !m)}
+                className="rounded-full bg-soft px-3 py-1 text-xs font-black text-muted no-select active:scale-95">
+          {more ? 'Moins' : 'Plus'}
+        </button>
       </div>
       <div className="mt-3 grid grid-cols-5 gap-2">
         {shown.map((m) => (
           <button key={m.code} onClick={() => pick(m.code, m.value, m.emoji)} aria-label={m.label}
-                  className="grid aspect-square place-items-center rounded-3xl border-2 border-line bg-card text-3xl transition no-select active:scale-90">
+                  className="grid aspect-square place-items-center rounded-3xl border-2 border-line bg-card text-3xl transition no-select active:scale-90 active:border-grape">
             {m.emoji}
           </button>
         ))}
@@ -301,12 +330,12 @@ function Next({ task, onChanged }: { task: Task; onChanged: () => void }) {
             )}
             <span className="chip">🕐 {task.start_time ? hhmm(task.start_time) : 'libre'}</span>
             <span className="chip">⏳ {humanDuration(task.duration_min)}</span>
-            <span className="chip !border-grape !bg-grape-light !text-grape">
-              +{task.coins} {settings.currency_emoji}
-            </span>
           </div>
 
-          <h2 className="mt-4 text-3xl font-black leading-tight text-ink">{task.title}</h2>
+          <p className="mt-4 text-xs font-black uppercase tracking-wide text-muted">
+            {task.start_time && toMinutes(task.start_time)! > nowMinutes() ? 'Prochaine tâche' : 'À faire maintenant'}
+          </p>
+          <h2 className="mt-1 text-[26px] font-black leading-tight text-ink">{task.title}</h2>
           {task.description && <p className="mt-2 whitespace-pre-wrap font-medium text-muted">{task.description}</p>}
 
           {task.parent_note && (
@@ -329,6 +358,7 @@ function Next({ task, onChanged }: { task: Task; onChanged: () => void }) {
           <button onClick={async () => { await A.startTask(task); onChanged(); }}
                   className="btn-leaf btn-lg mt-5 w-full animate-halo">
             ▶️ Je commence
+            <span className="ml-1 rounded-full bg-white/25 px-2.5 py-0.5 text-sm">+{task.coins} {settings.currency_emoji}</span>
           </button>
 
           <div className="mt-3 grid grid-cols-2 gap-2.5">
@@ -346,29 +376,30 @@ function Next({ task, onChanged }: { task: Task; onChanged: () => void }) {
              footer={
                <button className="btn-grape btn-lg w-full"
                        onClick={async () => {
-                         await A.reportBlocked(task, note, profile.id, null);
+                         await A.reportBlocked(task, note, profile.id);
                          setBlocked(false); setNote(''); toast('Message envoyé');
                        }}>
                  Envoyer
                </button>
              }>
+        <p className="mb-3 text-sm font-semibold text-muted">Tes parents reçoivent ton message tout de suite.</p>
         <textarea className="field min-h-[120px]" value={note} onChange={(e) => setNote(e.target.value)}
-                  placeholder="Je comprends pas l’exercice 3…" />
+                  placeholder="Je comprends pas l’exercice 3…" autoFocus />
       </Sheet>
     </>
   );
 }
 
 /* -------------------------------------------------------------- mode focus */
-function Focus({ task, onDone }: { task: Task; onDone: (a: A.AwardResult | null) => void }) {
+function Focus({ task, onDone }: { task: Task; onDone: () => void }) {
   const { settings } = useApp();
   const { seconds, running } = useTaskTimer(task);
   const [finish, setFinish] = useState(false);
   if (!settings) return null;
 
+  // Le chrono informe (temps passé, visible du parent) mais ne bloque plus rien.
   const goal = task.duration_min * 60;
-  const minSec = minTimerSeconds(settings, task);
-  const canFinish = seconds >= minSec;
+  const reached = seconds >= goal;
   const pct = Math.min(100, (seconds / goal) * 100);
   const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
   const ss = String(seconds % 60).padStart(2, '0');
@@ -378,9 +409,14 @@ function Focus({ task, onDone }: { task: Task; onDone: (a: A.AwardResult | null)
     <>
       <section className="card animate-rise p-5">
         <h2 className="text-center text-2xl font-black leading-tight text-ink">{task.title}</h2>
+        {task.link_url && (
+          <div className="mt-2 text-center">
+            <a href={task.link_url} target="_blank" rel="noreferrer" className="chip !border-grape !text-grape">🔗 Ouvrir le cours</a>
+          </div>
+        )}
 
-        <div className="mt-5 flex justify-center">
-          <Ring pct={pct} size={230} stroke={18} color={canFinish ? '#1FC08A' : '#7C4DEE'}>
+        <div className="mt-4 flex justify-center">
+          <Ring pct={pct} size={200} stroke={16} color={reached ? '#1FC08A' : '#7C4DEE'}>
             <div className="text-5xl font-black tabular-nums text-ink">{mm}:{ss}</div>
             <div className={clsx('mt-2 text-sm font-extrabold', running ? 'text-leaf' : 'text-sun-dark')}>
               {running ? '▶️ ça tourne' : '⏸️ en pause'}
@@ -413,13 +449,8 @@ function Focus({ task, onDone }: { task: Task; onDone: (a: A.AwardResult | null)
           </div>
         )}
 
-        {task.link_url && (
-          <a href={task.link_url} target="_blank" rel="noreferrer" className="btn-plain mt-4 w-full">🔗 Ouvrir</a>
-        )}
-
-        <button onClick={() => setFinish(true)} disabled={!canFinish}
-                className={clsx('btn-lg mt-5 w-full', canFinish ? 'btn-leaf' : 'btn-plain')}>
-          {canFinish ? '✅ J’ai fini' : `⏳ Encore ${Math.ceil((minSec - seconds) / 60)} min`}
+        <button onClick={() => setFinish(true)} className="btn-leaf btn-lg mt-5 w-full">
+          ✅ J’ai fini
         </button>
       </section>
 
@@ -429,7 +460,7 @@ function Focus({ task, onDone }: { task: Task; onDone: (a: A.AwardResult | null)
 }
 
 function FinishSheet({ open, onClose, task, onDone }: {
-  open: boolean; onClose: () => void; task: Task; onDone: (a: A.AwardResult | null) => void;
+  open: boolean; onClose: () => void; task: Task; onDone: () => void;
 }) {
   const { settings, profile } = useApp();
   const [file, setFile] = useState<File | null>(null);
@@ -437,80 +468,80 @@ function FinishSheet({ open, onClose, task, onDone }: {
   const [busy, setBusy] = useState(false);
   if (!settings || !profile) return null;
 
-  const needPhoto = requiresPhoto(settings, task);
-  const needValid = requiresValidation(settings, task);
-  const ready = !needPhoto || !!file;
-
   const submit = async () => {
+    if (!file) return;
     setBusy(true);
+    let url: string;
     try {
-      const url = file ? await A.uploadProof(file, profile.id) : null;
-      const res = await A.completeTask(task, settings, profile, { proofUrl: url, note: null, needsValidation: needValid });
+      url = await A.uploadProof(file, profile.id);
+    } catch {
+      // Sans ce message distinct, l'enfant pouvait croire sa photo envoyée.
+      toast('La photo n’est pas partie, réessaie', 'err');
+      setBusy(false);
+      return;
+    }
+    try {
+      await A.completeTask(task, url);
       onClose(); setFile(null); setPreview(null);
-      onDone(res);
-    } catch { toast('Erreur', 'err'); }
+      onDone();
+    } catch { toast('Pas envoyé, réessaie', 'err'); }
     finally { setBusy(false); }
   };
 
   return (
-    <Sheet open={open} onClose={onClose} title="Bien joué !"
+    <Sheet open={open} onClose={onClose} title="Bien joué ! 🎉"
            footer={
-             <button onClick={submit} disabled={!ready || busy} className="btn-leaf btn-lg w-full">
-               {busy ? '…' : needValid ? 'Envoyer à mes parents' : `Gagner ${task.coins} ${settings.currency_emoji}`}
+             <button onClick={submit} disabled={!file || busy} className="btn-leaf btn-lg w-full">
+               {busy ? 'Envoi…' : file ? 'Envoyer à mes parents' : 'Prends d’abord la photo'}
              </button>
            }>
-      {needPhoto ? (
-        <label className="flex min-h-[180px] cursor-pointer flex-col items-center justify-center gap-3 rounded-4xl border-[3px] border-dashed border-grape bg-grape-light p-4 text-center">
-          {preview
-            ? <img src={preview} alt="" className="max-h-60 rounded-3xl object-contain" />
-            : <><span className="text-5xl">📸</span><span className="font-extrabold text-grape">Photo de ton travail</span></>}
-          <input type="file" accept="image/*" capture="environment" className="hidden"
-                 onChange={(e) => {
-                   const f = e.target.files?.[0] ?? null;
-                   setFile(f); setPreview(f ? URL.createObjectURL(f) : null);
-                 }} />
-        </label>
-      ) : (
-        <p className="py-6 text-center text-6xl">🎉</p>
-      )}
+      <p className="mb-3 text-sm font-semibold text-muted">
+        Prends ton travail en photo : tes parents valident et tu gagnes tes {task.coins} {settings.currency_emoji}.
+      </p>
+      <label className="flex min-h-[200px] cursor-pointer flex-col items-center justify-center gap-3 rounded-4xl border-[3px] border-dashed border-grape bg-grape-light p-4 text-center">
+        {preview
+          ? <img src={preview} alt="" className="max-h-64 rounded-3xl object-contain" />
+          : <><span className="text-6xl">📸</span><span className="text-lg font-extrabold text-grape">Prendre la photo</span></>}
+        <input type="file" accept="image/*" capture="environment" className="hidden"
+               onChange={(e) => {
+                 const f = e.target.files?.[0] ?? null;
+                 setFile(f); setPreview(f ? URL.createObjectURL(f) : null);
+               }} />
+      </label>
+      {preview && <p className="mt-2 text-center text-xs font-bold text-muted">Touche la photo pour la refaire</p>}
     </Sheet>
   );
 }
 
 /* ------------------------------------------------------------- récompense */
-function AwardSheet({ award, onClose }: { award: A.AwardResult | null; onClose: () => void }) {
+/** Affichée quand le parent valide une tâche pendant que l'app est ouverte. */
+function AwardSheet({ award, onClose }: { award: Task | null; onClose: () => void }) {
   const { settings } = useApp();
   if (!award || !settings) return null;
   return (
-    <Sheet open onClose={onClose} title="Bravo !"
-           footer={<button onClick={onClose} className="btn-grape btn-lg w-full">Continuer</button>}>
+    <Sheet open onClose={onClose} title="Validé par tes parents !"
+           footer={<button onClick={onClose} className="btn-grape btn-lg w-full">Super</button>}>
       <div className="py-3 text-center">
-        <div className="animate-bob text-7xl">{settings.currency_emoji}</div>
-        <div className="mt-3 text-6xl font-black text-grape">+{award.coins}</div>
-        <div className="mt-2 text-xl font-extrabold text-sun-dark">+{award.xp} XP</div>
-
-        {!!award.bonuses.length && (
-          <div className="mt-4 flex flex-wrap justify-center gap-2">
-            {award.bonuses.map((b) => (
-              <span key={b.label} className="chip !border-leaf !bg-leaf-light !text-leaf-dark">
-                {b.label} +{b.pct}%
-              </span>
-            ))}
-          </div>
-        )}
-        {award.levelUp && (
-          <div className="mt-4 rounded-4xl bg-grape-light px-4 py-4">
-            <p className="text-4xl">🎊</p>
-            <p className="mt-1 text-xl font-black text-grape">Niveau {award.levelUp} !</p>
-          </div>
-        )}
-        {award.perfectDay && (
-          <div className="mt-3 rounded-4xl bg-sun-light px-4 py-3">
-            <p className="text-lg font-black text-sun-dark">💎 Journée parfaite</p>
-          </div>
-        )}
+        <p className="font-extrabold text-muted">{award.title}</p>
+        <div className="mt-3 animate-bob text-7xl">{settings.currency_emoji}</div>
+        <div className="mt-3 text-6xl font-black text-grape">+{award.coins_awarded ?? award.coins}</div>
+        {!!award.xp_awarded && <div className="mt-2 text-xl font-extrabold text-sun-dark">+{award.xp_awarded} XP</div>}
       </div>
     </Sheet>
+  );
+}
+
+/* ---------------------------------------------------- en attente parent -- */
+function Waiting({ tasks }: { tasks: Task[] }) {
+  const waiting = tasks.filter((t) => t.status === 'submitted');
+  if (!waiting.length) return null;
+  return (
+    <p className="flex items-center gap-2 rounded-3xl bg-sun-light px-4 py-3 text-sm font-bold text-ink">
+      <span className="text-lg">⏳</span>
+      {waiting.length === 1
+        ? <>« {waiting[0].title} » attend la validation de tes parents</>
+        : <>{waiting.length} tâches attendent la validation de tes parents</>}
+    </p>
   );
 }
 
@@ -523,14 +554,19 @@ function Queue({ tasks, currentId, onChanged }: { tasks: Task[]; currentId?: str
   return (
     <>
       <section className="card p-4">
-        <p className="mb-3 text-base font-extrabold text-ink">Ensuite</p>
+        <p className="mb-3 font-extrabold text-ink">Ensuite <span className="text-muted">· {rest.length}</span></p>
         <ul className="space-y-2">
           {rest.map((t) => (
             <li key={t.id} className="flex items-center gap-3 rounded-3xl bg-soft px-3.5 py-3">
               <span className="w-12 shrink-0 text-sm font-black tabular-nums text-ink">
-                {t.start_time ? hhmm(t.start_time) : '—'}
+                {t.start_time ? hhmm(t.start_time) : 'libre'}
               </span>
-              <span className="min-w-0 flex-1 truncate font-bold text-ink">{t.title}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-bold text-ink">{t.title}</span>
+                <span className="block truncate text-xs font-bold text-muted">
+                  {t.subject ? `${t.subject.emoji} ${t.subject.name} · ` : ''}{humanDuration(t.duration_min)}
+                </span>
+              </span>
               {!t.start_time && (
                 <button onClick={() => setPlace(t)}
                         className="shrink-0 rounded-2xl bg-grape px-3 py-2 text-xs font-black text-white no-select active:scale-95">

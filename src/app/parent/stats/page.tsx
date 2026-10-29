@@ -8,11 +8,13 @@ import { supabase } from '@/lib/supabase';
 import { useLive } from '@/lib/useLive';
 import { todayISO, addDaysISO, dayShort, dowOf } from '@/lib/dates';
 import { moodEmoji } from '@/lib/mood';
-import { Loader, Stat, Bar, Empty, SegmentedTabs, Sheet, NumberField, toast } from '@/components/ui';
+import { Loader, Stat, Bar, Empty, SegmentedTabs, Sheet, NumberField, PageHeader, toast } from '@/components/ui';
 import { compressImage } from '@/lib/image';
 import { notify } from '@/lib/actions';
 import { Trash2, Plus, Camera, Sparkles } from 'lucide-react';
 import type { Task, Mood, Quiz, QuizAttempt, QuizQuestion } from '@/lib/types';
+
+const CHART_H = 110;
 
 export default function StatsPage() { return <ParentShell><Suivi /></ParentShell>; }
 
@@ -20,7 +22,7 @@ function Suivi() {
   const [tab, setTab] = useState<'stats' | 'quiz'>('stats');
   return (
     <main className="mx-auto max-w-lg px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
-      <h1 className="text-3xl font-black text-ink">Suivi</h1>
+      <PageHeader title="Suivi" />
       <div className="mt-4">
         <SegmentedTabs value={tab} onChange={setTab}
                        options={[{ value: 'stats', label: '📊 Activité' }, { value: 'quiz', label: '🧠 Quiz' }]} />
@@ -105,17 +107,37 @@ function Activity() {
       </div>
 
       <section className="card p-4">
-        <div className="flex items-end gap-1" style={{ height: 110 }}>
-          {byDay.map((d) => (
-            <div key={d.day} className="flex flex-1 flex-col items-center gap-1">
-              <div className="flex w-full flex-1 items-end">
-                <div className="w-full rounded-t-lg transition-all"
-                     style={{ height: d.pct < 0 ? 4 : `${Math.max(8, d.pct)}%`,
-                              background: d.pct < 0 ? '#EBE3F9' : d.pct === 100 ? '#1FC08A' : d.pct >= 50 ? '#7C4DEE' : '#F4525C' }} />
+        <div className="mb-3 flex items-center justify-between">
+          <p className="font-black text-ink">Tâches faites par jour</p>
+          <span className="text-xs font-bold text-muted">{range} derniers jours</span>
+        </div>
+        {/* Hauteurs en pixels : en pourcentage, dans un conteneur sans hauteur
+            fixe, toutes les barres s'écrasaient à quelques pixels. */}
+        <div className="flex items-end gap-[3px]">
+          {byDay.map((d) => {
+            const isToday = d.day === todayISO();
+            const h = d.pct < 0 ? 4 : Math.max(6, Math.round((d.pct / 100) * CHART_H));
+            return (
+              <div key={d.day} className="flex min-w-0 flex-1 flex-col items-center">
+                <div className="flex w-full items-end" style={{ height: CHART_H }}>
+                  <div className={clsx('w-full rounded-t-md transition-all duration-500', isToday && 'ring-2 ring-grape/40 ring-offset-1')}
+                       title={d.pct < 0 ? 'Rien de prévu' : `${d.pct} %`}
+                       style={{ height: h,
+                                background: d.pct < 0 ? '#EBE3F9' : d.pct === 100 ? '#1FC08A' : d.pct >= 50 ? '#7C4DEE' : '#F4525C' }} />
+                </div>
+                {range <= 14 && (
+                  <span className={clsx('mt-1.5 text-[9px] font-black', isToday ? 'text-grape' : 'text-muted')}>
+                    {dayShort(dowOf(d.day)).slice(0, 1).toUpperCase()}
+                  </span>
+                )}
               </div>
-              <span className="text-[8px] font-bold text-muted">{dayShort(dowOf(d.day)).slice(0, 1)}</span>
-            </div>
-          ))}
+            );
+          })}
+        </div>
+        <div className="mt-3 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] font-bold text-muted">
+          <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-sm bg-leaf" />Tout fait</span>
+          <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-sm bg-grape" />Plus de la moitié</span>
+          <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-sm bg-flame" />Moins de la moitié</span>
         </div>
       </section>
 

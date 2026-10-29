@@ -11,7 +11,8 @@ import { todayISO, addDaysISO, weekStart, dayShort, dowOf, hhmm, longDate, human
 import { suggestCoins } from '@/lib/economy';
 import { notify } from '@/lib/actions';
 import Help from '@/components/Help';
-import { Loader, Sheet, Empty, SegmentedTabs, NumberField, toast } from '@/components/ui';
+import { Loader, Sheet, Empty, SegmentedTabs, NumberField, PageHeader, Toggle, toast } from '@/components/ui';
+import WeekStrip from '@/components/WeekStrip';
 import type { Task, Routine } from '@/lib/types';
 
 export default function AgendaPage() { return <ParentShell><Agenda /></ParentShell>; }
@@ -21,9 +22,6 @@ const emptyDraft = () => ({
   title: '', description: '', subject_id: '' as string,
   start_time: '09:00', duration_min: 45, difficulty: 2,
   is_flexible: false, coins: 0, coinsAuto: true,
-  require_photo: null as boolean | null,
-  require_validation: null as boolean | null,
-  min_timer_pct: null as number | null,
   allow_postpone: true,
   link_url: '', parent_note: '',
   subtasks: [] as string[],
@@ -38,7 +36,6 @@ function Agenda() {
   const [routines, setRoutines] = useState(false);
   const [copyOpen, setCopyOpen] = useState(false);
 
-  const week = useMemo(() => Array.from({ length: 7 }, (_, i) => addDaysISO(weekStart(day), i)), [day]);
   useLive(['routines', 'subjects'], reload, 'parent-agenda');
   const load = useMemo(() => tasks.reduce((n, t) => n + (t.status === 'skipped' ? 0 : t.duration_min), 0), [tasks]);
   if (loading || !child || !settings) return <Loader />;
@@ -46,31 +43,13 @@ function Agenda() {
 
   return (
     <main className="mx-auto max-w-lg px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
-      <div className="flex items-center justify-between gap-2">
-        <h1 className="text-3xl font-black text-ink">Agenda</h1>
-        <div className="flex gap-2">
-          <button onClick={() => setRoutines(true)} className="chip"><Repeat size={14} /> Routines</button>
-          <button onClick={() => setCopyOpen(true)} className="chip"><Copy size={14} /></button>
-        </div>
-      </div>
+      <PageHeader title="Agenda" right={<>
+        <button onClick={() => setRoutines(true)} className="chip"><Repeat size={14} /> Routines</button>
+        <button onClick={() => setCopyOpen(true)} className="chip" aria-label="Copier la journée"><Copy size={14} /></button>
+      </>} />
 
-      <div className="mt-4 flex gap-2">
-        {week.map((d) => {
-          const active = d === day;
-          return (
-            <button key={d} onClick={() => setDay(d)}
-                    className={clsx('flex flex-1 flex-col items-center rounded-3xl border-2 py-2.5 no-select transition',
-                      active ? 'border-grape bg-grape text-white' : d === todayISO() ? 'border-grape bg-card text-grape' : 'border-line bg-card text-muted')}>
-              <span className="text-[10px] font-black uppercase">{dayShort(dowOf(d))}</span>
-              <span className="text-xl font-black leading-tight">{Number(d.slice(-2))}</span>
-            </button>
-          );
-        })}
-      </div>
-      <div className="mt-3 flex justify-between">
-        <button onClick={() => setDay(addDaysISO(day, -7))} className="chip">←</button>
-        <button onClick={() => setDay(todayISO())} className="chip !border-grape !text-grape">Aujourd’hui</button>
-        <button onClick={() => setDay(addDaysISO(day, 7))} className="chip">→</button>
+      <div className="mt-4">
+        <WeekStrip childId={child.id} day={day} onChange={setDay} refreshKey={tasks} />
       </div>
 
       <div className="mt-5 flex items-center justify-between">
@@ -81,7 +60,7 @@ function Agenda() {
       </div>
 
       {tasks.length === 0 ? (
-        <div className="mt-5"><Empty emoji="📝" title="Journée vide" /></div>
+        <div className="mt-5"><Empty emoji="📝" title="Journée vide" hint="Ajoute une tâche, ou copie une autre journée avec le bouton ⧉." /></div>
       ) : (
         <ul className="stagger mt-4 space-y-3">
           {tasks.map((t) => (
@@ -96,8 +75,6 @@ function Agenda() {
                       <span>{humanDuration(t.duration_min)}</span>
                       <span className="text-grape">+{t.coins} {settings.currency_emoji}</span>
                       {t.routine_id && <span>↻</span>}
-                      {t.require_photo && <span>📷</span>}
-                      {t.require_validation && <span>👁️</span>}
                     </div>
                   </div>
                   <span className="shrink-0 text-xl">
@@ -111,7 +88,7 @@ function Agenda() {
       )}
 
       <button onClick={() => setDraft({ ...emptyDraft(), subject_id: subjects[0]?.id ?? '' })}
-              className="btn-grape btn-lg mt-5 w-full"><Plus size={20} /> Ajouter</button>
+              className="btn-grape btn-lg sticky bottom-28 mt-5 w-full shadow-lift"><Plus size={20} /> Ajouter une tâche</button>
 
       {draft && <TaskSheet draft={draft} day={day} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); reload(); }} />}
       <RoutinesSheet open={routines} onClose={() => setRoutines(false)} onGenerated={reload} />
@@ -125,7 +102,6 @@ function toDraft(t: Task): Draft {
     id: t.id, title: t.title, description: t.description ?? '', subject_id: t.subject_id ?? '',
     start_time: t.start_time ? hhmm(t.start_time) : '09:00', duration_min: t.duration_min,
     difficulty: t.difficulty, is_flexible: t.is_flexible, coins: t.coins, coinsAuto: false,
-    require_photo: t.require_photo, require_validation: t.require_validation, min_timer_pct: t.min_timer_pct,
     allow_postpone: t.allow_postpone, link_url: t.link_url ?? '', parent_note: t.parent_note ?? '',
     subtasks: (t.subtasks ?? []).map((s) => s.label),
   };
@@ -136,7 +112,9 @@ function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string
   const [d, setD] = useState<Draft>(draft);
   const [busy, setBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
-  const [tab, setTab] = useState<'base' | 'rules'>('base');
+  // Les options secondaires restent repliées : un titre, une matière, une
+  // heure et une durée suffisent pour la plupart des tâches.
+  const [more, setMore] = useState(!!(draft.subtasks.length || draft.link_url || draft.parent_note || !draft.allow_postpone));
   if (!settings || !child) return null;
 
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((x) => ({ ...x, [k]: v }));
@@ -153,8 +131,7 @@ function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string
         subject_id: d.subject_id || null,
         start_time: d.is_flexible ? null : d.start_time,
         duration_min: d.duration_min, is_flexible: d.is_flexible, difficulty: d.difficulty,
-        coins, require_photo: d.require_photo, require_validation: d.require_validation,
-        min_timer_pct: d.min_timer_pct, allow_postpone: d.allow_postpone,
+        coins, allow_postpone: d.allow_postpone,
         link_url: d.link_url.trim() || null, parent_note: d.parent_note.trim() || null,
       };
       let taskId = d.id;
@@ -192,24 +169,16 @@ function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string
     finally { setAiBusy(false); }
   };
 
-  const Tri = ({ v, fb, on }: { v: boolean | null; fb: boolean; on: (x: boolean | null) => void }) => (
-    <div className="flex gap-2">
-      {([['Auto', null], ['Oui', true], ['Non', false]] as [string, boolean | null][]).map(([lbl, val]) => (
-        <button key={lbl} onClick={() => on(val)}
-                className={clsx('flex-1 rounded-2xl border-2 py-2.5 text-sm font-extrabold transition',
-                  v === val ? 'border-grape bg-grape-light text-grape' : 'border-line bg-card text-muted')}>
-          {lbl}
-        </button>
-      ))}
-    </div>
-  );
-
   return (
     <Sheet open onClose={onClose} title={d.id ? 'Modifier' : 'Nouvelle tâche'}
            footer={
              <div className="flex gap-2.5">
                {d.id && (
-                 <button onClick={async () => { await supabase.from('tasks').delete().eq('id', d.id!); toast('Supprimée'); onSaved(); }}
+                 <button aria-label="Supprimer la tâche"
+                         onClick={async () => {
+                           if (!confirm('Supprimer cette tâche ?')) return;
+                           await supabase.from('tasks').delete().eq('id', d.id!); toast('Supprimée'); onSaved();
+                         }}
                          className="btn-flame !px-5"><Trash2 size={18} /></button>
                )}
                <button onClick={save} disabled={busy} className="btn-grape btn-lg flex-1">
@@ -217,164 +186,115 @@ function TaskSheet({ draft, day, onClose, onSaved }: { draft: Draft; day: string
                </button>
              </div>
            }>
-      <SegmentedTabs value={tab} onChange={setTab} options={[{ value: 'base', label: 'Contenu' }, { value: 'rules', label: 'Règles' }]} />
+      <div className="space-y-4">
+        <input className="field text-lg" value={d.title} onChange={(e) => set('title', e.target.value)}
+               placeholder="Ex. : Exercices 4 à 9 p. 112" autoFocus={!d.id} />
 
-      {tab === 'base' ? (
-        <div className="mt-5 space-y-4">
-          <input className="field" value={d.title} onChange={(e) => set('title', e.target.value)} placeholder="Titre" />
-
-          <div className="scroll-x flex gap-2 pb-1">
+        <div>
+          <label className="label">Matière</label>
+          <div className="flex flex-wrap gap-2">
             {subjects.map((s) => (
               <button key={s.id} onClick={() => set('subject_id', s.id)}
-                      className={clsx('chip shrink-0', d.subject_id === s.id && '!border-grape !bg-grape-light !text-grape')}>
+                      className={clsx('chip !text-[13px]', d.subject_id === s.id && '!border-grape !bg-grape-light !text-grape')}>
                 {s.emoji} {s.name}
               </button>
             ))}
           </div>
+        </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Heure</label>
-              <input type="time" className="field" value={d.start_time} disabled={d.is_flexible}
-                     onChange={(e) => set('start_time', e.target.value)} />
-            </div>
-            <div>
-              <label className="label">Durée</label>
-              <NumberField value={d.duration_min} min={5} onChange={(n) => set('duration_min', Math.max(5, n))} />
-            </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Heure</label>
+            {d.is_flexible
+              ? <button onClick={() => set('is_flexible', false)} className="field text-left text-muted">Libre · choisir</button>
+              : <input type="time" className="field" value={d.start_time} onChange={(e) => set('start_time', e.target.value)} />}
           </div>
-
-          <button onClick={() => set('is_flexible', !d.is_flexible)}
-                  className={clsx('flex w-full items-center gap-3 rounded-3xl border-2 px-4 py-3.5 text-left no-select',
-                    d.is_flexible ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
-            <span className="text-2xl">{d.is_flexible ? '🔓' : '🔒'}</span>
-            <span className="font-extrabold text-ink">Créneau libre</span>
+          <div>
+            <label className="label">Durée</label>
+            <NumberField value={d.duration_min} min={5} suffix="min" onChange={(n) => set('duration_min', Math.max(5, n))} />
+          </div>
+        </div>
+        {!d.is_flexible && (
+          <button onClick={() => set('is_flexible', true)} className="-mt-1 text-sm font-black text-grape">
+            🔓 Pas d’heure fixe : elle la place elle-même
           </button>
+        )}
 
-          <div>
-            <label className="label">Difficulté</label>
-            <div className="flex gap-2">
-              {['🙂', '😐', '😤', '🔥'].map((e, i) => (
-                <button key={i} onClick={() => set('difficulty', i + 1)}
-                        className={clsx('flex-1 rounded-2xl border-2 py-3 text-2xl transition',
-                          d.difficulty === i + 1 ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
-                  {e}
+        <div>
+          <label className="label">Difficulté</label>
+          <div className="grid grid-cols-4 gap-2">
+            {[['🙂', 'Facile'], ['😐', 'Moyen'], ['😤', 'Dur'], ['🔥', 'Très dur']].map(([e, l], i) => (
+              <button key={i} onClick={() => set('difficulty', i + 1)}
+                      className={clsx('flex flex-col items-center rounded-2xl border-2 py-2 transition',
+                        d.difficulty === i + 1 ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
+                <span className="text-2xl">{e}</span>
+                <span className={clsx('text-[11px] font-black', d.difficulty === i + 1 ? 'text-grape' : 'text-muted')}>{l}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 rounded-3xl bg-grape-light px-4 py-3">
+          <span className="text-2xl">{settings.currency_emoji}</span>
+          {d.coinsAuto ? (
+            <p className="flex-1 font-extrabold text-ink">Rapporte <b className="text-grape">{coins}</b> {settings.currency_name}</p>
+          ) : (
+            <div className="flex-1"><NumberField value={coins} min={0} onChange={(n) => set('coins', n)} /></div>
+          )}
+          <button onClick={() => setD((x) => ({ ...x, coinsAuto: !x.coinsAuto, coins: auto }))}
+                  className="shrink-0 text-sm font-black text-grape">
+            {d.coinsAuto ? 'Modifier' : 'Auto'}
+          </button>
+        </div>
+
+        <p className="rounded-3xl bg-soft px-4 py-3 text-sm font-semibold text-muted">
+          📸 Elle enverra une photo de son travail, et tu valides depuis le tableau de bord.
+        </p>
+
+        <button onClick={() => setMore((v) => !v)}
+                className="flex w-full items-center justify-between rounded-3xl border-2 border-line bg-card px-4 py-3 font-extrabold text-ink">
+          <span>Plus d’options</span><span className="text-muted">{more ? '▴' : '▾'}</span>
+        </button>
+
+        {more && (
+          <div className="space-y-4">
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <label className="label !mb-0">Étapes</label>
+                <button onClick={aiSplit} disabled={aiBusy || !d.title.trim()} className="chip !border-grape !bg-grape-light !text-grape">
+                  <Sparkles size={13} /> {aiBusy ? '…' : 'Découper avec l’IA'}
                 </button>
-              ))}
+              </div>
+              <div className="space-y-2">
+                {d.subtasks.map((st, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <input className="field !py-2.5" value={st}
+                           onChange={(e) => set('subtasks', d.subtasks.map((x, k) => (k === i ? e.target.value : x)))} />
+                    <button onClick={() => set('subtasks', d.subtasks.filter((_, k) => k !== i))} aria-label="Retirer l’étape"
+                            className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-soft"><X size={16} /></button>
+                  </div>
+                ))}
+                <button onClick={() => set('subtasks', [...d.subtasks, ''])} className="btn-plain w-full text-sm">
+                  <Plus size={16} /> Ajouter une étape
+                </button>
+              </div>
             </div>
-          </div>
 
-          <div>
-            <label className="label">Valeur</label>
-            <div className="flex gap-2">
-              {d.coinsAuto
-                ? <input className="field flex-1" value={coins} disabled />
-                : <NumberField value={coins} min={0} onChange={(n) => set('coins', n)} />}
-              <button onClick={() => setD((x) => ({ ...x, coinsAuto: !x.coinsAuto, coins: auto }))}
-                      className={clsx('chip !px-4', d.coinsAuto && '!border-grape !bg-grape-light !text-grape')}>
-                {d.coinsAuto ? 'Auto' : 'Manuel'}
-              </button>
+            <div>
+              <label className="label">Lien vers le cours</label>
+              <input className="field" value={d.link_url} onChange={(e) => set('link_url', e.target.value)}
+                     placeholder="https://…" inputMode="url" autoCapitalize="none" />
             </div>
+            <div>
+              <label className="label">Un mot pour {child.display_name}</label>
+              <textarea className="field min-h-[80px]" value={d.parent_note} onChange={(e) => set('parent_note', e.target.value)}
+                        placeholder="Relis bien la leçon avant de commencer" />
+            </div>
+            <Toggle emoji="⏭️" label="Elle peut la repousser un peu" checked={d.allow_postpone}
+                    onChange={(v) => set('allow_postpone', v)} />
           </div>
-
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <label className="label !mb-0">Étapes</label>
-              <button onClick={aiSplit} disabled={aiBusy} className="chip !border-grape !bg-grape-light !text-grape">
-                <Sparkles size={13} /> {aiBusy ? '…' : 'IA'}
-              </button>
-            </div>
-            <div className="space-y-2">
-              {d.subtasks.map((s, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <input className="field !py-2.5" value={s}
-                         onChange={(e) => set('subtasks', d.subtasks.map((x, k) => (k === i ? e.target.value : x)))} />
-                  <button onClick={() => set('subtasks', d.subtasks.filter((_, k) => k !== i))}
-                          className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-soft"><X size={16} /></button>
-                </div>
-              ))}
-              <button onClick={() => set('subtasks', [...d.subtasks, ''])} className="btn-plain w-full text-sm">
-                <Plus size={16} /> Étape
-              </button>
-            </div>
-          </div>
-
-          <input className="field" value={d.link_url} onChange={(e) => set('link_url', e.target.value)}
-                 placeholder="Lien (facultatif)" inputMode="url" autoCapitalize="none" />
-          <textarea className="field min-h-[80px]" value={d.parent_note} onChange={(e) => set('parent_note', e.target.value)}
-                    placeholder="Mot pour Jeanne" />
-        </div>
-      ) : (
-        <div className="mt-5 space-y-5">
-          <p className="rounded-3xl bg-soft px-4 py-3 text-sm font-medium leading-relaxed text-muted">
-            <b className="text-ink">Auto</b> = cette tâche suit le réglage général.
-            Choisis <b className="text-ink">Oui</b> ou <b className="text-ink">Non</b> pour décider
-            uniquement pour celle-ci.
-          </p>
-
-          <div>
-            <div className="mb-2 flex items-center gap-2">
-              <span className="text-sm font-extrabold text-ink">📷 Photo obligatoire</span>
-              <Help title="Photo obligatoire">
-                <p>Jeanne devra prendre son cahier en photo pour pouvoir valider la tâche.</p>
-                <p>Le bouton « J’ai fini » reste bloqué tant qu’elle n’a pas pris la photo.</p>
-                <p>Utile pour un exercice écrit. Inutile pour une lecture ou une révision orale.</p>
-              </Help>
-            </div>
-            <Tri v={d.require_photo} fb={settings.default_require_photo} on={(v) => set('require_photo', v)} />
-          </div>
-
-          <div>
-            <div className="mb-2 flex items-center gap-2">
-              <span className="text-sm font-extrabold text-ink">👁️ Validation parent</span>
-              <Help title="Validation parent">
-                <p>Quand Jeanne termine, la tâche vous est envoyée au lieu d’être validée tout de suite.</p>
-                <p>Elle ne reçoit ses points qu’après votre feu vert, depuis votre tableau de bord.</p>
-                <p>Attention : si vous mettez du temps à valider, la récompense arrive trop tard pour l’encourager. À réserver aux tâches qui comptent vraiment.</p>
-              </Help>
-            </div>
-            <Tri v={d.require_validation} fb={settings.default_require_validation} on={(v) => set('require_validation', v)} />
-          </div>
-
-          <div>
-            <div className="mb-2 flex items-center gap-2">
-              <span className="text-sm font-extrabold text-ink">
-                ⏱️ Minuteur · {d.min_timer_pct ?? settings.default_min_timer_pct} %
-              </span>
-              <Help title="Le minuteur, en clair">
-                <p>Quand Jeanne appuie sur « Je commence », un chronomètre démarre.</p>
-                <p>Ce réglage dit <b>combien de temps elle doit vraiment travailler</b> avant que le bouton « J’ai fini » se débloque. C’est un pourcentage de la durée que vous avez prévue.</p>
-                <p>Exemple : une tâche de 60 minutes réglée à 50 % se validera au bout de 30 minutes.</p>
-                <p>À <b>0 %</b>, elle peut cocher « fini » immédiatement, sans rien faire.</p>
-                <p>Le chronomètre ne tourne que si l’app est ouverte à l’écran. Si elle sort de l’app pour faire autre chose, le temps se met en pause et vous le voyez en direct.</p>
-              </Help>
-            </div>
-            <input type="range" min={0} max={100} step={10} className="w-full accent-grape"
-                   value={d.min_timer_pct ?? settings.default_min_timer_pct}
-                   onChange={(e) => set('min_timer_pct', Number(e.target.value))} />
-            <p className="mt-2 text-sm font-bold text-muted">
-              Elle pourra valider après{' '}
-              {Math.round((d.duration_min * (d.min_timer_pct ?? settings.default_min_timer_pct)) / 100)} min de travail
-            </p>
-          </div>
-
-          <div>
-            <div className="mb-2 flex items-center gap-2">
-              <span className="text-sm font-extrabold text-ink">⏭️ Report autorisé</span>
-              <Help title="Report">
-                <p>Jeanne peut repousser la tâche de quelques minutes, un nombre limité de fois par jour.</p>
-                <p>Décochez pour une tâche qui ne se négocie pas : le bouton disparaît de son écran.</p>
-              </Help>
-            </div>
-            <button onClick={() => set('allow_postpone', !d.allow_postpone)}
-                    className={clsx('flex w-full items-center gap-3 rounded-3xl border-2 px-4 py-3.5 no-select',
-                      d.allow_postpone ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
-              <span className="text-2xl">{d.allow_postpone ? '✅' : '🚫'}</span>
-              <span className="font-extrabold text-ink">{d.allow_postpone ? 'Autorisé' : 'Interdit'}</span>
-            </button>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
     </Sheet>
   );
 }
@@ -501,8 +421,7 @@ function CopySheet({ open, onClose, day, tasks, onDone }: {
         child_id: child!.id, created_by: profile!.id, day: target, subject_id: t.subject_id,
         title: t.title, description: t.description, start_time: t.start_time, duration_min: t.duration_min,
         is_flexible: t.is_flexible, difficulty: t.difficulty, coins: t.coins,
-        require_photo: t.require_photo, require_validation: t.require_validation,
-        min_timer_pct: t.min_timer_pct, allow_postpone: t.allow_postpone,
+        allow_postpone: t.allow_postpone,
         link_url: t.link_url, parent_note: t.parent_note,
       }).select('id').single();
       if (data && t.subtasks?.length) {

@@ -34,17 +34,17 @@ export default function ParentShell({ children }: { children: React.ReactNode })
   if (!ready || !profile) return <Loader />;
 
   return (
-    <div className="min-h-dvh pb-28" onTouchStart={swipe.onTouchStart} onTouchEnd={swipe.onTouchEnd}>
+    <div className="min-h-dvh pb-tabbar" onTouchStart={swipe.onTouchStart} onTouchEnd={swipe.onTouchEnd}>
       <Toaster />
       {children}
-      <nav className="tabbar fixed inset-x-0 bottom-0 z-40">
-        <div className="mx-auto flex max-w-lg px-2 pt-2">
+      <nav className="tabbar fixed inset-x-3 z-40 mx-auto max-w-[500px] rounded-[28px]">
+        <div className="flex p-1.5">
           {TABS.map(({ href, label, Icon }) => {
             const active = href === '/parent' ? path === '/parent' : path.startsWith(href);
             return (
-              <Link key={href} href={href}
-                    className={clsx('flex flex-1 flex-col items-center gap-1 rounded-2xl py-2 no-select transition',
-                      active ? 'bg-grape-light text-grape' : 'text-muted')}>
+              <Link key={href} href={href} aria-current={active ? 'page' : undefined}
+                    className={clsx('flex flex-1 flex-col items-center gap-1 rounded-[22px] py-2 no-select transition',
+                      active ? 'bg-grape-light text-grape' : 'text-muted active:bg-soft')}>
                 <Icon size={21} strokeWidth={active ? 2.6 : 2} />
                 <span className="text-[10px] font-extrabold">{label}</span>
               </Link>

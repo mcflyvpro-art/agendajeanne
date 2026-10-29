@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { admin } from '@/lib/admin';
-import { sendPush } from '@/lib/push';
+import { pushToProfile } from '@/lib/push';
 import { whoami } from '@/lib/auth-api';
 import type { Profile, Settings } from '@/lib/types';
 
@@ -27,6 +27,24 @@ function fromChild(kind: string, name: string, b: any): { copy: Copy; pref: stri
       return { pref: 'mood', copy: { title: `💭 Humeur du jour`, body: `${name} se sent : ${b.emoji ?? ''}`.trim(), url: '/parent' } };
     case 'message_reaction':
       return { pref: 'message_reaction', copy: { title: `${b.emoji ?? ''} Réaction de ${name}`.trim(), body: String(b.body ?? '').slice(0, 80), url: '/parent' } };
+    default: return null;
+  }
+}
+
+/**
+ * Trace rangée dans la boîte aux lettres du parent. Les notifications ne
+ * s'empilent plus sur le tableau de bord : elles arrivent toutes ici, avec
+ * une pastille de non-lus. Le SOS est déjà écrit par l'app (avec la tâche).
+ */
+function mailFromChild(kind: string, name: string, b: any): { emoji: string; body: string } | null {
+  switch (kind) {
+    case 'task_submitted':   return { emoji: '👁️', body: `${name} a terminé « ${b.taskTitle ?? 'une tâche'} » — à valider` };
+    case 'purchase':         return { emoji: '🎁', body: `${name} demande « ${b.reward} » (${b.cost} points)` };
+    case 'quiz_done':        return { emoji: '🧠', body: `Quiz « ${b.title} » : ${b.score}/${b.total}` };
+    case 'badge':            return { emoji: '🏆', body: `${name} a débloqué un badge` };
+    case 'level_up':         return { emoji: '⭐', body: `${name} passe au niveau ${b.level}` };
+    case 'mood':             return { emoji: String(b.emoji ?? '💭'), body: `Humeur de ${name}` };
+    case 'message_reaction': return { emoji: String(b.emoji ?? '💌'), body: `${name} a réagi à « ${String(b.body ?? '').slice(0, 60)} »` };
     default: return null;
   }
 }
@@ -72,11 +90,8 @@ export async function POST(req: Request) {
   const child = all.find((p) => p.role === 'child');
 
   const deliver = async (targets: Profile[], c: Copy, kind: string) => {
-    const res = await Promise.all(targets.map(async (p) => {
-      const r = await sendPush(p.push_subscription, { title: c.title, body: c.body, url: c.url, kind, tag: kind });
-      if (r.gone) await db.from('profiles').update({ push_enabled: false, push_subscription: null }).eq('id', p.id);
-      return r.ok;
-    }));
+    const res = await Promise.all(targets.map((p) =>
+      pushToProfile(db, p, { title: c.title, body: c.body, url: c.url, kind, tag: kind })));
     return res.filter(Boolean).length;
   };
 
@@ -90,6 +105,12 @@ export async function POST(req: Request) {
     if (!m) return NextResponse.json({ ok: true, sent: 0 });
     if (settings?.notif_parent && settings.notif_parent[m.pref as keyof typeof settings.notif_parent] === false) {
       return NextResponse.json({ ok: true, sent: 0, skipped: 'préférence' });
+    }
+    const mail = mailFromChild(body.kind, me.display_name, body);
+    if (mail && parents.length) {
+      await db.from('messages').insert(parents.map((p) => ({
+        from_id: me.id, to_id: p.id, task_id: body.taskId ?? null, kind: 'system', emoji: mail.emoji, body: mail.body,
+      })));
     }
     return NextResponse.json({ ok: true, sent: await deliver(parents, m.copy, body.kind) });
   }

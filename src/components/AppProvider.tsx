@@ -1,7 +1,7 @@
 'use client';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabase';
+import { supabase, jwtIat } from '@/lib/supabase';
 import type { Profile, Settings, Subject } from '@/lib/types';
 
 interface Ctx {
@@ -25,6 +25,21 @@ export const useApp = () => useContext(AppCtx);
 /** Au-delà de ce délai en arrière-plan, la session parent est fermée. */
 const PARENT_IDLE_MS = 5 * 60 * 1000;
 
+/** Jeton refusé par l'API : expiré, signature invalide, « JWT issued at future »… */
+const isJwtError = (e: { code?: string; message?: string } | null) =>
+  !!e && (/^PGRST30/.test(e.code ?? '') || /jwt/i.test(e.message ?? ''));
+
+/** Message lisible, avec l'avance mesurée du serveur quand le jeton est daté dans le futur. */
+async function describeLoadError(message: string): Promise<string> {
+  if (!/future/i.test(message)) return message;
+  const { data } = await supabase.auth.getSession();
+  const iat = jwtIat(data.session?.access_token);
+  if (iat === null) return message;
+  const ahead = Math.round(iat - Date.now() / 1000);
+  return `Le serveur de connexion Supabase a ${ahead} s d’avance sur l’heure réelle, `
+    + `et l’API refuse ses jetons au-delà de 30 s (${message}).`;
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -36,16 +51,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const loadAll = useCallback(async (uid: string) => {
     try {
-      const [p, s, subj] = await Promise.all([
+      const fetchCore = () => Promise.all([
         supabase.from('profiles').select('*').eq('id', uid).maybeSingle(),
         supabase.from('settings').select('*').eq('id', 1).maybeSingle(),
         supabase.from('subjects').select('*').eq('active', true).order('position'),
       ]);
+      let [p, s, subj] = await fetchCore();
+
+      // Jeton refusé malgré l'attente faite dans `patientFetch` (jeton expiré,
+      // ou émis pendant un dérèglement d'horloge passé) : sans reprise, l'app
+      // restait bloquée jusqu'à une déconnexion manuelle. Un jeton neuf suffit.
+      if (isJwtError(p.error ?? s.error ?? subj.error)) {
+        const { data } = await supabase.auth.refreshSession();
+        if (!data.session) return; // jeton de rafraîchissement révoqué : SIGNED_OUT renvoie vers la connexion
+        [p, s, subj] = await fetchCore();
+      }
 
       // Une erreur ici laissait l'app tourner en boucle sur un écran de
       // chargement : on la remonte pour pouvoir l'afficher.
       const err = p.error ?? s.error ?? subj.error;
-      if (err) { setLoadError(err.message); return; }
+      if (err) { setLoadError(await describeLoadError(err.message)); return; }
       if (!p.data) { setLoadError('Aucun profil associé à ce compte.'); return; }
 
       setLoadError(null);
@@ -168,8 +193,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => document.removeEventListener('visibilitychange', onChange);
   }, [ready, profile?.role]);
 
+  /**
+   * Déconnexion de CET appareil seulement. La portée par défaut (« global »)
+   * révoquait toutes les sessions du compte : se déconnecter du compte de
+   * Jeanne sur le téléphone du parent la déconnectait aussi sur le sien.
+   */
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: 'local' });
     location.href = '/login';
   }, []);
 

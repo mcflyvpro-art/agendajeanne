@@ -1,8 +1,10 @@
 'use client';
 import { supabase } from '@/lib/supabase';
-import { computeAward, dayIsComplete, badgesToUnlock, levelOf } from '@/lib/economy';
+import { dayIsComplete, badgesToUnlock, levelOf } from '@/lib/economy';
 import { todayISO, addDaysISO, toMinutes, nowMinutes, fromMinutes } from '@/lib/dates';
-import type { Profile, Settings, Task } from '@/lib/types';
+import { compressToJpeg } from '@/lib/image';
+import { PROOF_BUCKET, proofPath } from '@/lib/proofs';
+import type { Profile, Redemption, Settings, Task } from '@/lib/types';
 
 /** Envoie une notification à l'autre membre de la famille. Ne bloque jamais l'action. */
 export async function notify(kind: string, payload: Record<string, unknown> = {}) {
@@ -67,59 +69,81 @@ export async function scheduleTask(taskId: string, time: string) {
   }).eq('id', taskId);
 }
 
-export async function reportBlocked(task: Task, note: string, childId: string, parentId: string | null) {
+export async function reportBlocked(task: Task, note: string, childId: string) {
   await supabase.from('tasks').update({ blocked_note: note }).eq('id', task.id);
-  if (parentId) {
-    await supabase.from('messages').insert({
-      from_id: childId, to_id: parentId, task_id: task.id, kind: 'blocked',
-      body: note || 'Je bloque sur cette tâche', emoji: '🆘',
-    });
+  // L'écran enfant ne connaît pas l'identifiant du parent : sans cette
+  // recherche, le message n'était jamais écrit et n'apparaissait pas côté parent.
+  const { data: parents } = await supabase.from('profiles').select('id').eq('role', 'parent');
+  if (parents?.length) {
+    await supabase.from('messages').insert(parents.map((p) => ({
+      from_id: childId, to_id: p.id, task_id: task.id, kind: 'blocked',
+      body: `${task.title} — ${note.trim() || 'je bloque sur cette tâche'}`, emoji: '🆘',
+    })));
   }
   await notify('blocked', { taskId: task.id, note });
 }
 
 /* ------------------------------------------------------------ validation -- */
 
-export interface AwardResult {
-  coins: number; xp: number;
-  bonuses: { label: string; pct: number }[];
-  badges: string[]; perfectDay: boolean;
-  levelUp: number | null;
+/** Démarrée dans les 5 minutes suivant l'heure prévue (créneau libre : toujours à l'heure). */
+export function wasOnTime(task: Task): boolean {
+  const planned = toMinutes(task.start_time);
+  if (planned === null || !task.started_at) return true;
+  return nowMinutes(new Date(task.started_at)) <= planned + 5;
 }
 
-export async function completeTask(
-  task: Task, s: Settings, child: Profile,
-  opts: { proofUrl?: string | null; note?: string | null; needsValidation: boolean }
-): Promise<AwardResult | null> {
-  const now = new Date();
-  const base = {
-    completed_at: now.toISOString(),
-    proof_url: opts.proofUrl ?? null,
-    child_note: opts.note ?? null,
+/**
+ * L'enfant a fini : la tâche part chez le parent avec sa photo. Les points
+ * sont crédités à la validation. La garde d'état évite un double envoi
+ * (double appui, ou le même compte ouvert sur deux appareils).
+ */
+export async function completeTask(task: Task, proofUrl: string): Promise<void> {
+  const { data, error } = await supabase.from('tasks').update({
+    status: 'submitted',
+    completed_at: new Date().toISOString(),
+    proof_url: proofUrl,
     timer_running: false,
     timer_segment_at: null,
-  };
+  }).eq('id', task.id).not('status', 'in', '(done,submitted)').select('id');
+  if (error) throw error;
+  if (data?.length) await notify('task_submitted', { taskId: task.id });
+}
 
-  if (opts.needsValidation) {
-    await supabase.from('tasks').update({ ...base, status: 'submitted' }).eq('id', task.id);
-    await notify('task_submitted', { taskId: task.id });
-    return null;
+/** Supprime une photo de preuve qui a servi. Un échec est rattrapé par le ménage quotidien. */
+export async function removeProof(url: string | null | undefined) {
+  const path = proofPath(url);
+  if (path) await supabase.storage.from(PROOF_BUCKET).remove([path]).catch(() => {});
+}
+
+/* ---------------------------------------------------------------- solde -- */
+
+/**
+ * Ajoute (ou retire) des pièces et de l'XP sans écraser un mouvement fait
+ * entre-temps depuis l'autre appareil. Le nouveau solde était calculé à partir
+ * du profil gardé en mémoire : si l'enfant achetait pendant que le parent
+ * validait, la dernière écriture effaçait la première. On écrit donc en
+ * « compare-and-set » : la mise à jour n'aboutit que si le solde relu n'a pas
+ * bougé, sinon on relit et on recommence.
+ *
+ * Renvoie le profil à jour, ou `null` si `requireFunds` et solde insuffisant.
+ */
+export async function creditChild(
+  childId: string, coins: number, xp = 0,
+  opts: { requireFunds?: boolean; set?: Partial<Profile> } = {}
+): Promise<Profile | null> {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const { data: cur, error } = await supabase.from('profiles').select('*').eq('id', childId).single();
+    if (error) throw error;
+    const p = cur as Profile;
+    if (opts.requireFunds && p.coins + coins < 0) return null;
+    const { data: next, error: err } = await supabase.from('profiles')
+      .update({ ...opts.set, coins: Math.max(0, p.coins + coins), xp: Math.max(0, p.xp + xp) })
+      .eq('id', childId).eq('coins', p.coins).eq('xp', p.xp)
+      .select().maybeSingle();
+    if (err) throw err;
+    if (next) return next as Profile;
   }
-
-  const onTime = (() => {
-    const planned = toMinutes(task.start_time);
-    if (planned === null || !task.started_at) return true;
-    return nowMinutes(new Date(task.started_at)) <= planned + 5;
-  })();
-
-  const award = computeAward(s, task, { onTime, streak: child.streak_current });
-  await supabase.from('tasks').update({
-    ...base, status: 'done', validated_at: now.toISOString(),
-    coins_awarded: award.coins, xp_awarded: award.xp,
-  }).eq('id', task.id);
-
-  const extra = await settleDay(task, s, child, award.coins, award.xp, `Tâche : ${task.title}`, task.id);
-  return { ...award, ...extra };
+  throw new Error('Solde modifié en même temps, réessaie');
 }
 
 /** Crédite, met à jour série, journée parfaite, niveau et badges. */
@@ -130,16 +154,25 @@ export async function settleDay(
   let totalCoins = coins;
   const today = todayISO();
 
+  // Profil relu : celui en mémoire peut dater d'avant un mouvement fait sur
+  // l'autre appareil (série, XP, journée parfaite déjà comptée…).
+  const { data: row } = await supabase.from('profiles').select('*').eq('id', child.id).maybeSingle();
+  const fresh = (row as Profile | null) ?? child;
+
   await supabase.from('ledger').insert({ child_id: child.id, amount: coins, reason, kind: 'task', ref_id: refId });
 
   const { data: dayTasks } = await supabase.from('tasks').select('*').eq('child_id', child.id).eq('day', task.day);
   const complete = dayIsComplete((dayTasks ?? []) as Task[]);
 
-  let streak = child.streak_current;
+  let streak = fresh.streak_current;
   let perfectDay = false;
-  if (complete && task.day === today && child.last_streak_day !== today) {
+  // Le jour compte au moment de la validation, même si elle arrive le
+  // lendemain matin : toutes les tâches passent désormais par le parent, et
+  // une journée finie le soir ne doit pas perdre sa série pour autant.
+  // Un jour plus ancien que le dernier compté ne compte plus (pas de double).
+  if (complete && task.day <= today && task.day > (fresh.last_streak_day ?? '')) {
     perfectDay = true;
-    streak = child.last_streak_day === addDaysISO(today, -1) ? child.streak_current + 1 : 1;
+    streak = fresh.last_streak_day === addDaysISO(task.day, -1) ? fresh.streak_current + 1 : 1;
     totalCoins += s.perfect_day_bonus;
     await supabase.from('ledger').insert({
       child_id: child.id, amount: s.perfect_day_bonus, reason: 'Journée parfaite 💎', kind: 'bonus',
@@ -147,9 +180,8 @@ export async function settleDay(
   }
 
   // Montée de niveau
-  const newXp = child.xp + xp;
-  const before = levelOf(child.xp, s.xp_per_level).level;
-  const after = levelOf(newXp, s.xp_per_level).level;
+  const before = levelOf(fresh.xp, s.xp_per_level).level;
+  const after = levelOf(fresh.xp + xp, s.xp_per_level).level;
   let levelUp: number | null = null;
   if (after > before) {
     levelUp = after;
@@ -163,14 +195,14 @@ export async function settleDay(
     notify('level_up', { level: after });
   }
 
-  await supabase.from('profiles').update({
-    coins: child.coins + totalCoins,
-    xp: newXp,
-    level_reached: after,
-    streak_current: streak,
-    streak_best: Math.max(child.streak_best, streak),
-    ...(perfectDay ? { last_streak_day: today } : {}),
-  }).eq('id', child.id);
+  await creditChild(child.id, totalCoins, xp, {
+    set: {
+      level_reached: after,
+      streak_current: streak,
+      streak_best: Math.max(fresh.streak_best, streak),
+      ...(perfectDay ? { last_streak_day: task.day } : {}),
+    },
+  });
 
   if (levelUp) await grantLevelItems(child.id, after);
   const badges = await checkBadges(child.id, streak, after);
@@ -223,34 +255,72 @@ export async function checkBadges(childId: string, streak: number, level = 1): P
   });
   if (!unlocked.length) return [];
 
-  await supabase.from('earned_badges').insert(unlocked.map((code) => ({ child_id: childId, code })));
-  const bonus = (all ?? []).filter((b: any) => unlocked.includes(b.code)).reduce((n: number, b: any) => n + b.coins_reward, 0);
+  // Seuls les badges réellement enregistrés rapportent. Sans cette
+  // vérification, une écriture refusée (ou déjà faite depuis l'autre appareil)
+  // recréditait le bonus et renvoyait la notification à chaque tâche.
+  const { data: inserted } = await supabase.from('earned_badges')
+    .upsert(unlocked.map((code) => ({ child_id: childId, code })), { onConflict: 'child_id,code', ignoreDuplicates: true })
+    .select('code');
+  const got = ((inserted ?? []) as { code: string }[]).map((b) => b.code);
+  if (!got.length) return [];
+
+  const bonus = (all ?? []).filter((b: any) => got.includes(b.code)).reduce((n: number, b: any) => n + b.coins_reward, 0);
   if (bonus > 0) {
-    const { data: p } = await supabase.from('profiles').select('coins').eq('id', childId).maybeSingle();
-    await supabase.from('profiles').update({ coins: (p?.coins ?? 0) + bonus }).eq('id', childId);
+    await creditChild(childId, bonus);
     await supabase.from('ledger').insert({ child_id: childId, amount: bonus, reason: 'Badge débloqué', kind: 'bonus' });
   }
-  notify('badge', { codes: unlocked });
-  return unlocked;
+  notify('badge', { codes: got });
+  return got;
 }
 
 /* ------------------------------------------------------------- parent ---- */
 
 /** Ajustement manuel du solde : le parent garde toujours la main. */
 export async function adjustBalance(child: Profile, amount: number, reason: string) {
-  const next = Math.max(0, child.coins + amount);
-  await supabase.from('profiles').update({ coins: next }).eq('id', child.id);
+  await creditChild(child.id, amount);
   await supabase.from('ledger').insert({
     child_id: child.id, amount, kind: 'manual',
     reason: reason.trim() || (amount >= 0 ? 'Ajout du parent' : 'Retrait du parent'),
   });
 }
 
-/** Téléverse une photo de preuve dans le bucket public `proofs`. */
+/**
+ * Accorde ou refuse une demande de récompense. La garde sur `pending` empêche
+ * qu'une même demande, ouverte sur deux écrans, soit traitée deux fois et ses
+ * points rendus en double. Renvoie faux si elle était déjà traitée.
+ */
+export async function resolveRedemption(r: Redemption, approve: boolean, parentId: string): Promise<boolean> {
+  const { data } = await supabase.from('redemptions')
+    .update({ status: approve ? 'approved' : 'refused', resolved_at: new Date().toISOString() })
+    .eq('id', r.id).eq('status', 'pending').select('id');
+  if (!data?.length) return false;
+
+  if (!approve) {
+    await creditChild(r.child_id, r.cost_paid);
+    await supabase.from('ledger').insert({
+      child_id: r.child_id, amount: r.cost_paid, reason: `Annulé : ${r.reward_name}`, kind: 'reward',
+    });
+  }
+  await supabase.from('messages').insert({
+    from_id: parentId, to_id: r.child_id, kind: 'system',
+    body: approve ? `${r.reward_name} accordée !` : `${r.reward_name} refusée, points rendus.`,
+    emoji: approve ? '🎁' : '↩️',
+  });
+  notify('kudos', { body: approve ? `${r.reward_name} accordée ! 🎁` : `${r.reward_name} refusée`, emoji: approve ? '🎁' : '↩️' });
+  return true;
+}
+
+/**
+ * Téléverse une photo de preuve dans le bucket public `proofs`.
+ * Une photo d'iPhone pèse 3 à 5 Mo : réduite à 1600 px elle part en quelques
+ * centaines de Ko, ce qui fiabilise l'envoi en 4G et l'affichage côté parent.
+ */
 export async function uploadProof(file: File, childId: string): Promise<string> {
-  const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+  const jpeg = await compressToJpeg(file).catch(() => null);
+  const ext = jpeg ? 'jpg' : file.name.split('.').pop()?.toLowerCase() || 'jpg';
   const path = `${childId}/${Date.now()}.${ext}`;
-  const { error } = await supabase.storage.from('proofs').upload(path, file, { upsert: true, contentType: file.type });
+  const { error } = await supabase.storage.from(PROOF_BUCKET)
+    .upload(path, jpeg ?? file, { upsert: true, contentType: jpeg ? 'image/jpeg' : file.type });
   if (error) throw error;
-  return supabase.storage.from('proofs').getPublicUrl(path).data.publicUrl;
+  return supabase.storage.from(PROOF_BUCKET).getPublicUrl(path).data.publicUrl;
 }

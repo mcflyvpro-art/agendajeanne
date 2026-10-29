@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import ParentShell from '@/components/ParentShell';
 import { useApp } from '@/components/AppProvider';
@@ -11,10 +11,39 @@ import Help, { LabelHelp } from '@/components/Help';
 import { resetChildAccount } from '@/lib/reset';
 import { Loader, SegmentedTabs, Toggle, NumberField, Sheet, toast } from '@/components/ui';
 import LevelRoad from '@/components/LevelRoad';
+import PushManager from '@/components/PushManager';
 import type { Reward } from '@/lib/types';
 import type { Settings, Tone, ParentNotifKind, ChildNotifKind } from '@/lib/types';
 
 export default function RulesPage() { return <ParentShell><Rules /></ParentShell>; }
+
+/**
+ * Champs du formulaire. Ils étaient déclarés à l'intérieur de `Rules` : chaque
+ * frappe recréait leur type, React démontait le champ et le clavier se
+ * fermait après le premier chiffre (« 27 » donnait « 2 »). Ils lisent
+ * désormais l'état via un contexte.
+ */
+const FormCtx = createContext<{ s: Settings; set: <K extends keyof Settings>(k: K, v: Settings[K]) => void } | null>(null);
+
+function Num({ k, label, suffix, help }: { k: keyof Settings; label: string; suffix?: string; help?: React.ReactNode }) {
+  const { s, set } = useContext(FormCtx)!;
+  return (
+    <div>
+      {help ? <LabelHelp label={label} help={help} /> : <label className="label">{label}</label>}
+      <NumberField value={s[k] as number} suffix={suffix} onChange={(n) => set(k, n as any)} />
+    </div>
+  );
+}
+
+function Time({ k, label }: { k: keyof Settings; label: string }) {
+  const { s, set } = useContext(FormCtx)!;
+  return (
+    <div>
+      <label className="label">{label}</label>
+      <input type="time" className="field" value={String(s[k]).slice(0, 5)} onChange={(e) => set(k, e.target.value as any)} />
+    </div>
+  );
+}
 
 const CURRENCIES = ['🪙', '⭐', '💎', '🔶', '🍬', '⚡', '🏅', '🌟'];
 
@@ -49,13 +78,18 @@ const CHILD_NOTIFS: { k: ChildNotifKind; emoji: string; label: string }[] = [
 function Rules() {
   const { settings, refresh, signOut, child } = useApp();
   const [s, setS] = useState<Settings | null>(null);
-  const [tab, setTab] = useState<'eco' | 'xp' | 'rules' | 'notif' | 'goal'>('eco');
+  const [tab, setTab] = useState<'eco' | 'notif' | 'goal'>('eco');
+  const [advanced, setAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { if (settings) setS(settings); }, [settings]);
+  const [dirty, setDirty] = useState(false);
+
+  // Une mise à jour venue du serveur (autre appareil, retour dans l'app)
+  // écrasait les modifications en cours : on ne la reprend que hors saisie.
+  useEffect(() => { if (settings && !dirty) setS(settings); }, [settings, dirty]);
   if (!s) return <Loader />;
 
-  const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setS({ ...s, [k]: v });
+  const set = <K extends keyof Settings>(k: K, v: Settings[K]) => { setS((cur) => (cur ? { ...cur, [k]: v } : cur)); setDirty(true); };
 
   const save = async () => {
     setBusy(true);
@@ -63,41 +97,24 @@ function Rules() {
     const { error } = await supabase.from('settings').update({ ...rest, updated_at: new Date().toISOString() }).eq('id', 1);
     setBusy(false);
     if (error) toast(error.message, 'err');
-    else { await refresh(); toast('Enregistré'); }
+    else { setDirty(false); await refresh(); toast('Enregistré'); }
   };
 
-  const Num = ({ k, label, suffix, help }: {
-    k: keyof Settings; label: string; suffix?: string; help?: React.ReactNode;
-  }) => (
-    <div>
-      {help ? <LabelHelp label={label} help={help} /> : <label className="label">{label}</label>}
-      <NumberField value={s[k] as number} suffix={suffix} onChange={(n) => set(k, n as any)} />
-    </div>
-  );
-
-  const Time = ({ k, label }: { k: keyof Settings; label: string }) => (
-    <div>
-      <label className="label">{label}</label>
-      <input type="time" className="field" value={String(s[k]).slice(0, 5)} onChange={(e) => set(k, e.target.value as any)} />
-    </div>
-  );
-
   return (
+    <FormCtx.Provider value={{ s, set }}>
     <main className="mx-auto max-w-lg px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
       <SecretResetTitle />
 
       <div className="mt-4">
-        <SegmentedTabs value={tab} onChange={setTab} options={[
+        <SegmentedTabs value={tab} onChange={(t) => { setTab(t); setAdvanced(false); }} options={[
           { value: 'eco',   label: '💰 Points' },
-          { value: 'xp',    label: '⚡ XP' },
-          { value: 'rules', label: '🛡️ Règles' },
-          { value: 'notif', label: '🔔 Notifs' },
-          { value: 'goal',  label: '🎯 Cadre' },
+          { value: 'notif', label: '🔔 Rappels' },
+          { value: 'goal',  label: '⚙️ Général' },
         ]} />
       </div>
 
       <div className="mt-5 space-y-5">
-        {tab === 'eco' && <Calibrator s={s} onApply={(v) => setS({ ...s, ...v })} />}
+        {tab === 'eco' && <Calibrator s={s} onApply={(v) => { setS({ ...s, ...v }); setDirty(true); }} />}
 
         {tab === 'eco' && (
           <>
@@ -118,18 +135,6 @@ function Rules() {
               </div>
             </div>
 
-            <Num k="base_coins" label="Points de base par tâche"
-                 help={<>
-                   <p>Chaque tâche rapporte ce montant de départ, quelle que soit sa durée.</p>
-                   <p>La formule complète est : <b>base + (points par 10 min × durée) × difficulté</b>.</p>
-                   <p>Augmenter cette valeur récompense surtout le fait de <b>commencer</b> une tâche, pas d’y passer du temps.</p>
-                 </>} />
-            <Num k="coins_per_10min" label="Points par 10 minutes"
-                 help={<>
-                   <p>S’ajoute au montant de base, proportionnellement à la durée prévue.</p>
-                   <p>Augmenter cette valeur récompense les <b>tâches longues</b>. À l’inverse, la baisser met tout le monde à égalité et pousse à enchaîner les petites tâches.</p>
-                 </>} />
-
             <div className="card bg-soft p-4">
               <p className="mb-3 font-black text-ink">Ce que ça donne</p>
               <ul className="space-y-2">
@@ -141,6 +146,28 @@ function Rules() {
                 ))}
               </ul>
             </div>
+
+            <button onClick={() => setAdvanced((v) => !v)}
+                    className="flex w-full items-center justify-between rounded-3xl border-2 border-line bg-card px-4 py-3.5 font-extrabold text-ink">
+              <span>🛠️ Réglages avancés</span>
+              <span className="text-muted">{advanced ? '▴' : '▾'}</span>
+            </button>
+          </>
+        )}
+
+        {tab === 'eco' && advanced && (
+          <>
+            <Num k="base_coins" label="Points de base par tâche"
+                 help={<>
+                   <p>Chaque tâche rapporte ce montant de départ, quelle que soit sa durée.</p>
+                   <p>La formule complète est : <b>base + (points par 10 min × durée) × difficulté</b>.</p>
+                   <p>Augmenter cette valeur récompense surtout le fait de <b>commencer</b> une tâche, pas d’y passer du temps.</p>
+                 </>} />
+            <Num k="coins_per_10min" label="Points par 10 minutes"
+                 help={<>
+                   <p>S’ajoute au montant de base, proportionnellement à la durée prévue.</p>
+                   <p>Augmenter cette valeur récompense les <b>tâches longues</b>. À l’inverse, la baisser met tout le monde à égalité et pousse à enchaîner les petites tâches.</p>
+                 </>} />
 
             <Num k="punctuality_bonus_pct" label="Bonus ponctualité" suffix="%"
                  help={<>
@@ -161,7 +188,7 @@ function Rules() {
           </>
         )}
 
-        {tab === 'xp' && (
+        {tab === 'eco' && advanced && (
           <>
             <div className="card bg-soft p-4">
               <LabelHelp label="À quoi servent les XP ?" title="Points et XP, quelle différence ?"
@@ -178,7 +205,7 @@ function Rules() {
             <Num k="xp_per_task" label="XP par tâche" suffix="⚡"
                  help={<><p>Multiplié par la difficulté de la tâche, comme les points.</p></>} />
             <Num k="xp_per_quiz_answer" label="XP par bonne réponse" suffix="⚡" />
-            <LevelPace s={s} onGoToEco={() => setTab('eco')} onChange={(v) => setS({ ...s, ...v })} />
+            <LevelPace s={s} onGoToEco={() => window.scrollTo({ top: 0, behavior: 'smooth' })} onChange={(v) => { setS({ ...s, ...v }); setDirty(true); }} />
             <Num k="level_up_coins" label="Bonus à chaque niveau" suffix={s.currency_emoji} />
             <Num k="daily_xp_goal" label="Objectif XP du jour" suffix="⚡"
                  help={<>
@@ -190,28 +217,27 @@ function Rules() {
           </>
         )}
 
-        {tab === 'rules' && (
+        {tab === 'goal' && (
           <>
-            <Toggle emoji="📷" label="Photo de preuve" checked={s.default_require_photo}
-                    onChange={(v) => set('default_require_photo', v)} />
-            <Toggle emoji="👁️" label="Validation parent" checked={s.default_require_validation}
-                    onChange={(v) => set('default_require_validation', v)} />
-
             <div>
-              <LabelHelp label={`⏱️ Minuteur minimum · ${s.default_min_timer_pct} %`} title="Minuteur minimum"
-                         help={<>
-                           <p>Part de la durée prévue qu’elle doit réellement passer sur la tâche avant que le bouton « J’ai fini » se débloque.</p>
-                           <p>À <b>60 %</b>, une tâche de 45 min se valide au bout de 27 minutes.</p>
-                           <p>À <b>0 %</b>, elle peut cocher instantanément.</p>
-                           <p>Le chrono ne tourne que si l’app est affichée : sortir de l’app le met en pause.</p>
-                         </>} />
-              <input type="range" min={0} max={100} step={10} className="w-full accent-grape"
-                     value={s.default_min_timer_pct} onChange={(e) => set('default_min_timer_pct', Number(e.target.value))} />
-              <p className="mt-2 text-sm font-bold text-muted">
-                Une tâche de 45 min se valide après {Math.round((45 * s.default_min_timer_pct) / 100)} min
-              </p>
+              <label className="label">Objectif de fond</label>
+              <input className="field" value={s.goal_title} onChange={(e) => set('goal_title', e.target.value)} />
             </div>
-
+            <div>
+              <label className="label">Date cible</label>
+              <input type="date" className="field" value={s.goal_date ?? ''} onChange={(e) => set('goal_date', e.target.value || null)} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Time k="day_start" label="Début de journée" />
+              <Time k="day_end" label="Fin de journée" />
+            </div>
+          </>
+        )}
+        {tab === 'goal' && (
+          <>
+            <div className="rounded-3xl bg-grape-light px-4 py-3 text-sm font-bold text-ink">
+              📸 Règle unique : chaque tâche se termine par une photo, et c’est toi qui valides.
+            </div>
             <Num k="max_postpones_per_day" label="Reports par jour"
                  help={<>
                    <p>Nombre de fois où elle peut repousser une tâche dans la journée.</p>
@@ -238,11 +264,15 @@ function Rules() {
               <Toggle emoji="📸" label="Elle peut créer ses propres quiz"
                       checked={s.child_can_create_quiz} onChange={(v) => set('child_can_create_quiz', v)} />
             </div>
+            <button onClick={() => { if (confirm('Se déconnecter de cet appareil ?')) signOut(); }} className="btn-plain w-full">
+              Se déconnecter de cet appareil
+            </button>
           </>
         )}
 
         {tab === 'notif' && (
           <>
+            <PushManager />
             <div>
               <label className="label">Ton des messages</label>
               <div className="grid grid-cols-2 gap-2.5">
@@ -321,32 +351,17 @@ function Rules() {
           </>
         )}
 
-        {tab === 'goal' && (
-          <>
-            <div>
-              <label className="label">Objectif de fond</label>
-              <input className="field" value={s.goal_title} onChange={(e) => set('goal_title', e.target.value)} />
-            </div>
-            <div>
-              <label className="label">Date cible</label>
-              <input type="date" className="field" value={s.goal_date ?? ''} onChange={(e) => set('goal_date', e.target.value || null)} />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <Time k="day_start" label="Début de journée" />
-              <Time k="day_end" label="Fin de journée" />
-            </div>
-            <div className="card p-4">
-              <p className="font-extrabold text-ink">👧 {child?.display_name ?? '—'}</p>
-            </div>
-            <button onClick={signOut} className="btn-plain w-full">Se déconnecter</button>
-          </>
-        )}
       </div>
 
-      <button onClick={save} disabled={busy} className="btn-grape btn-lg sticky bottom-28 mt-7 w-full shadow-lift">
-        {busy ? '…' : '💾 Enregistrer'}
-      </button>
+      {dirty ? (
+        <button onClick={save} disabled={busy} className="btn-grape btn-lg sticky bottom-28 mt-7 w-full animate-rise shadow-lift">
+          {busy ? 'Enregistrement…' : '💾 Enregistrer les modifications'}
+        </button>
+      ) : (
+        <p className="mt-7 text-center text-sm font-bold text-muted">✓ Tout est enregistré</p>
+      )}
     </main>
+    </FormCtx.Provider>
   );
 }
 
@@ -591,7 +606,7 @@ function SecretResetTitle() {
 
   return (
     <>
-      <h1 onClick={tap} className="select-none text-3xl font-black text-ink">Réglages</h1>
+      <h1 onClick={tap} className="select-none text-[32px] font-black leading-tight text-ink">Réglages</h1>
       <Sheet open={confirm} onClose={() => setConfirm(false)} title="Tout effacer ?">
         <p className="font-medium leading-relaxed text-muted">
           Points, XP, niveau, série, tâches, routines, quiz, messages, badges, avatars débloqués,

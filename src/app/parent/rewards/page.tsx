@@ -8,8 +8,8 @@ import { supabase } from '@/lib/supabase';
 import { useLive } from '@/lib/useLive';
 import { AVATAR_CHOICES } from '@/lib/avatars';
 import { weekStart, todayISO } from '@/lib/dates';
-import { notify } from '@/lib/actions';
-import { Loader, Sheet, Empty, SegmentedTabs, NumberField, toast } from '@/components/ui';
+import { notify, resolveRedemption } from '@/lib/actions';
+import { Loader, Sheet, Empty, SegmentedTabs, NumberField, PageHeader, SectionTitle, toast } from '@/components/ui';
 import type { Reward, Redemption, Contract } from '@/lib/types';
 
 export default function RewardsPage() { return <ParentShell><Rewards /></ParentShell>; }
@@ -87,17 +87,7 @@ function Rewards() {
   };
 
   const resolve = async (r: Redemption, approve: boolean) => {
-    await supabase.from('redemptions').update({ status: approve ? 'approved' : 'refused', resolved_at: new Date().toISOString() }).eq('id', r.id);
-    if (!approve) {
-      await supabase.from('profiles').update({ coins: child.coins + r.cost_paid }).eq('id', child.id);
-      await supabase.from('ledger').insert({ child_id: child.id, amount: r.cost_paid, reason: `Annulé : ${r.reward_name}`, kind: 'reward' });
-    }
-    await supabase.from('messages').insert({
-      from_id: profile!.id, to_id: child.id, kind: 'system',
-      body: approve ? `${r.reward_name} accordée !` : `${r.reward_name} refusée, points rendus.`,
-      emoji: approve ? '🎁' : '↩️',
-    });
-    notify('kudos', { body: approve ? `${r.reward_name} accordée ! 🎁` : `${r.reward_name} refusée`, emoji: approve ? '🎁' : '↩️' });
+    if (!(await resolveRedemption(r, approve, profile!.id))) toast('Déjà traitée');
     await Promise.all([load(), refreshChild()]);
   };
 
@@ -105,7 +95,7 @@ function Rewards() {
 
   return (
     <main className="mx-auto max-w-lg px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
-      <h1 className="text-3xl font-black text-ink">Boutique</h1>
+      <PageHeader title="Boutique" subtitle="Récompenses et contrat" />
 
       <div className="mt-4">
         <SegmentedTabs value={tab} onChange={setTab} options={[
@@ -122,7 +112,7 @@ function Rewards() {
             if (!rows.length) return null;
             return (
               <section key={k} className="mt-6">
-                <h2 className="mb-3 text-lg font-black text-ink">{k === 'item' ? '🎭 Avatars' : '🎁 Récompenses'}</h2>
+                <SectionTitle>{k === 'item' ? '🎭 Avatars' : '🎁 Récompenses'}</SectionTitle>
                 <ul className="stagger space-y-3">
                   {rows.map((r) => (
                     <li key={r.id}>
