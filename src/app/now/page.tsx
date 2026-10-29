@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import clsx from 'clsx';
 import ChildShell from '@/components/ChildShell';
@@ -10,7 +10,7 @@ import { useLive } from '@/lib/useLive';
 import { useTaskTimer } from '@/lib/useTimer';
 import { supabase } from '@/lib/supabase';
 import { todayISO, hhmm, humanDuration, fromMinutes, toMinutes, nowMinutes } from '@/lib/dates';
-import { minTimerSeconds, requiresPhoto, requiresValidation, progressOf, levelOf, xpToday } from '@/lib/economy';
+import { progressOf, levelOf, xpToday } from '@/lib/economy';
 import { MOOD_SCALE, MOOD_SPECIAL } from '@/lib/mood';
 import { REACTIONS, reactionEmoji } from '@/lib/reactions';
 import * as A from '@/lib/actions';
@@ -24,7 +24,7 @@ function Now() {
   const today = todayISO();
   const { tasks, loading, reload } = useDay(profile?.id, today);
   const [fire, setFire] = useState(0);
-  const [award, setAward] = useState<A.AwardResult | null>(null);
+  const [award, setAward] = useState<Task | null>(null);
 
   const current = useMemo(
     () => tasks.find((t) => t.status === 'doing') ?? tasks.find((t) => t.status === 'todo') ?? null,
@@ -33,14 +33,24 @@ function Now() {
 
   useLive(['messages', 'rewards', 'contracts', 'profiles'], refresh, 'now');
 
+  // Les points arrivent quand le parent valide : on fête ce moment-là, en
+  // direct, plutôt qu'à l'envoi où rien n'est encore gagné.
+  const seen = useRef<Map<string, Task['status']>>(new Map());
+  useEffect(() => {
+    for (const t of tasks) {
+      const before = seen.current.get(t.id);
+      if (before === 'submitted' && t.status === 'done') { setFire((n) => n + 1); setAward(t); }
+      if (before === 'submitted' && t.status === 'todo') toast(`↩️ À refaire : ${t.title}`, 'err');
+      seen.current.set(t.id, t.status);
+    }
+  }, [tasks]);
+
   if (loading || !settings || !profile) return <Loader />;
   const prog = progressOf(tasks);
 
-  const onDone = async (a: A.AwardResult | null) => {
+  const onDone = async () => {
     await Promise.all([reload(), refresh()]);
-    if (!a) { toast('Envoyé à tes parents'); return; }
-    setFire((n) => n + 1);
-    setAward(a);
+    toast('Envoyé à tes parents 👀');
   };
 
   return (
@@ -57,6 +67,7 @@ function Now() {
             ? <Focus task={current} onDone={onDone} />
             : <Next task={current} onChanged={reload} />
         ) : <AllDone done={prog.done} />}
+        <Waiting tasks={tasks} />
         <AssignedQuizCard />
         <MoodRow />
         <Queue tasks={tasks} currentId={current?.id} onChanged={reload} />
@@ -380,15 +391,15 @@ function Next({ task, onChanged }: { task: Task; onChanged: () => void }) {
 }
 
 /* -------------------------------------------------------------- mode focus */
-function Focus({ task, onDone }: { task: Task; onDone: (a: A.AwardResult | null) => void }) {
+function Focus({ task, onDone }: { task: Task; onDone: () => void }) {
   const { settings } = useApp();
   const { seconds, running } = useTaskTimer(task);
   const [finish, setFinish] = useState(false);
   if (!settings) return null;
 
+  // Le chrono informe (temps passé, visible du parent) mais ne bloque plus rien.
   const goal = task.duration_min * 60;
-  const minSec = minTimerSeconds(settings, task);
-  const canFinish = seconds >= minSec;
+  const reached = seconds >= goal;
   const pct = Math.min(100, (seconds / goal) * 100);
   const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
   const ss = String(seconds % 60).padStart(2, '0');
@@ -405,7 +416,7 @@ function Focus({ task, onDone }: { task: Task; onDone: (a: A.AwardResult | null)
         )}
 
         <div className="mt-4 flex justify-center">
-          <Ring pct={pct} size={200} stroke={16} color={canFinish ? '#1FC08A' : '#7C4DEE'}>
+          <Ring pct={pct} size={200} stroke={16} color={reached ? '#1FC08A' : '#7C4DEE'}>
             <div className="text-5xl font-black tabular-nums text-ink">{mm}:{ss}</div>
             <div className={clsx('mt-2 text-sm font-extrabold', running ? 'text-leaf' : 'text-sun-dark')}>
               {running ? '▶️ ça tourne' : '⏸️ en pause'}
@@ -438,9 +449,8 @@ function Focus({ task, onDone }: { task: Task; onDone: (a: A.AwardResult | null)
           </div>
         )}
 
-        <button onClick={() => setFinish(true)} disabled={!canFinish}
-                className={clsx('btn-lg mt-5 w-full', canFinish ? 'btn-leaf' : 'btn-plain')}>
-          {canFinish ? '✅ J’ai fini' : `⏳ Encore ${Math.ceil((minSec - seconds) / 60)} min`}
+        <button onClick={() => setFinish(true)} className="btn-leaf btn-lg mt-5 w-full">
+          ✅ J’ai fini
         </button>
       </section>
 
@@ -450,7 +460,7 @@ function Focus({ task, onDone }: { task: Task; onDone: (a: A.AwardResult | null)
 }
 
 function FinishSheet({ open, onClose, task, onDone }: {
-  open: boolean; onClose: () => void; task: Task; onDone: (a: A.AwardResult | null) => void;
+  open: boolean; onClose: () => void; task: Task; onDone: () => void;
 }) {
   const { settings, profile } = useApp();
   const [file, setFile] = useState<File | null>(null);
@@ -458,15 +468,12 @@ function FinishSheet({ open, onClose, task, onDone }: {
   const [busy, setBusy] = useState(false);
   if (!settings || !profile) return null;
 
-  const needPhoto = requiresPhoto(settings, task);
-  const needValid = requiresValidation(settings, task);
-  const ready = !needPhoto || !!file;
-
   const submit = async () => {
+    if (!file) return;
     setBusy(true);
-    let url: string | null = null;
+    let url: string;
     try {
-      url = file ? await A.uploadProof(file, profile.id) : null;
+      url = await A.uploadProof(file, profile.id);
     } catch {
       // Sans ce message distinct, l'enfant pouvait croire sa photo envoyée.
       toast('La photo n’est pas partie, réessaie', 'err');
@@ -474,72 +481,67 @@ function FinishSheet({ open, onClose, task, onDone }: {
       return;
     }
     try {
-      const res = await A.completeTask(task, settings, profile, { proofUrl: url, note: null, needsValidation: needValid });
+      await A.completeTask(task, url);
       onClose(); setFile(null); setPreview(null);
-      onDone(res);
-    } catch { toast('Erreur', 'err'); }
+      onDone();
+    } catch { toast('Pas envoyé, réessaie', 'err'); }
     finally { setBusy(false); }
   };
 
   return (
-    <Sheet open={open} onClose={onClose} title="Bien joué !"
+    <Sheet open={open} onClose={onClose} title="Bien joué ! 🎉"
            footer={
-             <button onClick={submit} disabled={!ready || busy} className="btn-leaf btn-lg w-full">
-               {busy ? '…' : needValid ? 'Envoyer à mes parents' : `Gagner ${task.coins} ${settings.currency_emoji}`}
+             <button onClick={submit} disabled={!file || busy} className="btn-leaf btn-lg w-full">
+               {busy ? 'Envoi…' : file ? 'Envoyer à mes parents' : 'Prends d’abord la photo'}
              </button>
            }>
-      {needPhoto ? (
-        <label className="flex min-h-[180px] cursor-pointer flex-col items-center justify-center gap-3 rounded-4xl border-[3px] border-dashed border-grape bg-grape-light p-4 text-center">
-          {preview
-            ? <img src={preview} alt="" className="max-h-60 rounded-3xl object-contain" />
-            : <><span className="text-5xl">📸</span><span className="font-extrabold text-grape">Photo de ton travail</span></>}
-          <input type="file" accept="image/*" capture="environment" className="hidden"
-                 onChange={(e) => {
-                   const f = e.target.files?.[0] ?? null;
-                   setFile(f); setPreview(f ? URL.createObjectURL(f) : null);
-                 }} />
-        </label>
-      ) : (
-        <p className="py-6 text-center text-6xl">🎉</p>
-      )}
+      <p className="mb-3 text-sm font-semibold text-muted">
+        Prends ton travail en photo : tes parents valident et tu gagnes tes {task.coins} {settings.currency_emoji}.
+      </p>
+      <label className="flex min-h-[200px] cursor-pointer flex-col items-center justify-center gap-3 rounded-4xl border-[3px] border-dashed border-grape bg-grape-light p-4 text-center">
+        {preview
+          ? <img src={preview} alt="" className="max-h-64 rounded-3xl object-contain" />
+          : <><span className="text-6xl">📸</span><span className="text-lg font-extrabold text-grape">Prendre la photo</span></>}
+        <input type="file" accept="image/*" capture="environment" className="hidden"
+               onChange={(e) => {
+                 const f = e.target.files?.[0] ?? null;
+                 setFile(f); setPreview(f ? URL.createObjectURL(f) : null);
+               }} />
+      </label>
+      {preview && <p className="mt-2 text-center text-xs font-bold text-muted">Touche la photo pour la refaire</p>}
     </Sheet>
   );
 }
 
 /* ------------------------------------------------------------- récompense */
-function AwardSheet({ award, onClose }: { award: A.AwardResult | null; onClose: () => void }) {
+/** Affichée quand le parent valide une tâche pendant que l'app est ouverte. */
+function AwardSheet({ award, onClose }: { award: Task | null; onClose: () => void }) {
   const { settings } = useApp();
   if (!award || !settings) return null;
   return (
-    <Sheet open onClose={onClose} title="Bravo !"
-           footer={<button onClick={onClose} className="btn-grape btn-lg w-full">Continuer</button>}>
+    <Sheet open onClose={onClose} title="Validé par tes parents !"
+           footer={<button onClick={onClose} className="btn-grape btn-lg w-full">Super</button>}>
       <div className="py-3 text-center">
-        <div className="animate-bob text-7xl">{settings.currency_emoji}</div>
-        <div className="mt-3 text-6xl font-black text-grape">+{award.coins}</div>
-        <div className="mt-2 text-xl font-extrabold text-sun-dark">+{award.xp} XP</div>
-
-        {!!award.bonuses.length && (
-          <div className="mt-4 flex flex-wrap justify-center gap-2">
-            {award.bonuses.map((b) => (
-              <span key={b.label} className="chip !border-leaf !bg-leaf-light !text-leaf-dark">
-                {b.label} +{b.pct}%
-              </span>
-            ))}
-          </div>
-        )}
-        {award.levelUp && (
-          <div className="mt-4 rounded-4xl bg-grape-light px-4 py-4">
-            <p className="text-4xl">🎊</p>
-            <p className="mt-1 text-xl font-black text-grape">Niveau {award.levelUp} !</p>
-          </div>
-        )}
-        {award.perfectDay && (
-          <div className="mt-3 rounded-4xl bg-sun-light px-4 py-3">
-            <p className="text-lg font-black text-sun-dark">💎 Journée parfaite</p>
-          </div>
-        )}
+        <p className="font-extrabold text-muted">{award.title}</p>
+        <div className="mt-3 animate-bob text-7xl">{settings.currency_emoji}</div>
+        <div className="mt-3 text-6xl font-black text-grape">+{award.coins_awarded ?? award.coins}</div>
+        {!!award.xp_awarded && <div className="mt-2 text-xl font-extrabold text-sun-dark">+{award.xp_awarded} XP</div>}
       </div>
     </Sheet>
+  );
+}
+
+/* ---------------------------------------------------- en attente parent -- */
+function Waiting({ tasks }: { tasks: Task[] }) {
+  const waiting = tasks.filter((t) => t.status === 'submitted');
+  if (!waiting.length) return null;
+  return (
+    <p className="flex items-center gap-2 rounded-3xl bg-sun-light px-4 py-3 text-sm font-bold text-ink">
+      <span className="text-lg">⏳</span>
+      {waiting.length === 1
+        ? <>« {waiting[0].title} » attend la validation de tes parents</>
+        : <>{waiting.length} tâches attendent la validation de tes parents</>}
+    </p>
   );
 }
 

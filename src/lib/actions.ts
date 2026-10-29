@@ -1,8 +1,9 @@
 'use client';
 import { supabase } from '@/lib/supabase';
-import { computeAward, dayIsComplete, badgesToUnlock, levelOf } from '@/lib/economy';
+import { dayIsComplete, badgesToUnlock, levelOf } from '@/lib/economy';
 import { todayISO, addDaysISO, toMinutes, nowMinutes, fromMinutes } from '@/lib/dates';
 import { compressToJpeg } from '@/lib/image';
+import { PROOF_BUCKET, proofPath } from '@/lib/proofs';
 import type { Profile, Redemption, Settings, Task } from '@/lib/types';
 
 /** Envoie une notification à l'autre membre de la famille. Ne bloque jamais l'action. */
@@ -84,53 +85,34 @@ export async function reportBlocked(task: Task, note: string, childId: string) {
 
 /* ------------------------------------------------------------ validation -- */
 
-export interface AwardResult {
-  coins: number; xp: number;
-  bonuses: { label: string; pct: number }[];
-  badges: string[]; perfectDay: boolean;
-  levelUp: number | null;
+/** Démarrée dans les 5 minutes suivant l'heure prévue (créneau libre : toujours à l'heure). */
+export function wasOnTime(task: Task): boolean {
+  const planned = toMinutes(task.start_time);
+  if (planned === null || !task.started_at) return true;
+  return nowMinutes(new Date(task.started_at)) <= planned + 5;
 }
 
-export async function completeTask(
-  task: Task, s: Settings, child: Profile,
-  opts: { proofUrl?: string | null; note?: string | null; needsValidation: boolean }
-): Promise<AwardResult | null> {
-  const now = new Date();
-  const base = {
-    completed_at: now.toISOString(),
-    proof_url: opts.proofUrl ?? null,
-    child_note: opts.note ?? null,
+/**
+ * L'enfant a fini : la tâche part chez le parent avec sa photo. Les points
+ * sont crédités à la validation. La garde d'état évite un double envoi
+ * (double appui, ou le même compte ouvert sur deux appareils).
+ */
+export async function completeTask(task: Task, proofUrl: string): Promise<void> {
+  const { data, error } = await supabase.from('tasks').update({
+    status: 'submitted',
+    completed_at: new Date().toISOString(),
+    proof_url: proofUrl,
     timer_running: false,
     timer_segment_at: null,
-  };
-
-  if (opts.needsValidation) {
-    // Erreur remontée : ignorée, l'enfant voyait « envoyé » alors que rien n'était parti.
-    const { data, error } = await supabase.from('tasks').update({ ...base, status: 'submitted' })
-      .eq('id', task.id).not('status', 'in', '(done,submitted)').select('id');
-    if (error) throw error;
-    if (data?.length) await notify('task_submitted', { taskId: task.id });
-    return null;
-  }
-
-  const onTime = (() => {
-    const planned = toMinutes(task.start_time);
-    if (planned === null || !task.started_at) return true;
-    return nowMinutes(new Date(task.started_at)) <= planned + 5;
-  })();
-
-  const award = computeAward(s, task, { onTime, streak: child.streak_current });
-  // Garde d'état : une tâche déjà terminée (double appui, ou depuis l'autre
-  // appareil connecté au même compte) ne doit pas rapporter deux fois.
-  const { data, error } = await supabase.from('tasks').update({
-    ...base, status: 'done', validated_at: now.toISOString(),
-    coins_awarded: award.coins, xp_awarded: award.xp,
   }).eq('id', task.id).not('status', 'in', '(done,submitted)').select('id');
   if (error) throw error;
-  if (!data?.length) return null;
+  if (data?.length) await notify('task_submitted', { taskId: task.id });
+}
 
-  const extra = await settleDay(task, s, child, award.coins, award.xp, `Tâche : ${task.title}`, task.id);
-  return { ...award, ...extra };
+/** Supprime une photo de preuve qui a servi. Un échec est rattrapé par le ménage quotidien. */
+export async function removeProof(url: string | null | undefined) {
+  const path = proofPath(url);
+  if (path) await supabase.storage.from(PROOF_BUCKET).remove([path]).catch(() => {});
 }
 
 /* ---------------------------------------------------------------- solde -- */
@@ -184,9 +166,13 @@ export async function settleDay(
 
   let streak = fresh.streak_current;
   let perfectDay = false;
-  if (complete && task.day === today && fresh.last_streak_day !== today) {
+  // Le jour compte au moment de la validation, même si elle arrive le
+  // lendemain matin : toutes les tâches passent désormais par le parent, et
+  // une journée finie le soir ne doit pas perdre sa série pour autant.
+  // Un jour plus ancien que le dernier compté ne compte plus (pas de double).
+  if (complete && task.day <= today && task.day > (fresh.last_streak_day ?? '')) {
     perfectDay = true;
-    streak = fresh.last_streak_day === addDaysISO(today, -1) ? fresh.streak_current + 1 : 1;
+    streak = fresh.last_streak_day === addDaysISO(task.day, -1) ? fresh.streak_current + 1 : 1;
     totalCoins += s.perfect_day_bonus;
     await supabase.from('ledger').insert({
       child_id: child.id, amount: s.perfect_day_bonus, reason: 'Journée parfaite 💎', kind: 'bonus',
@@ -214,7 +200,7 @@ export async function settleDay(
       level_reached: after,
       streak_current: streak,
       streak_best: Math.max(fresh.streak_best, streak),
-      ...(perfectDay ? { last_streak_day: today } : {}),
+      ...(perfectDay ? { last_streak_day: task.day } : {}),
     },
   });
 
@@ -333,8 +319,8 @@ export async function uploadProof(file: File, childId: string): Promise<string> 
   const jpeg = await compressToJpeg(file).catch(() => null);
   const ext = jpeg ? 'jpg' : file.name.split('.').pop()?.toLowerCase() || 'jpg';
   const path = `${childId}/${Date.now()}.${ext}`;
-  const { error } = await supabase.storage.from('proofs')
+  const { error } = await supabase.storage.from(PROOF_BUCKET)
     .upload(path, jpeg ?? file, { upsert: true, contentType: jpeg ? 'image/jpeg' : file.type });
   if (error) throw error;
-  return supabase.storage.from('proofs').getPublicUrl(path).data.publicUrl;
+  return supabase.storage.from(PROOF_BUCKET).getPublicUrl(path).data.publicUrl;
 }

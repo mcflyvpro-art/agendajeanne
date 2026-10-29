@@ -3,19 +3,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import clsx from 'clsx';
 import ParentShell from '@/components/ParentShell';
-import PushManager from '@/components/PushManager';
+import ParentInbox from '@/components/ParentInbox';
 import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
 import { useDay } from '@/lib/useDay';
 import { useLive } from '@/lib/useLive';
 import { todayISO, hhmm, nowMinutes, toMinutes, longDate, relativeDay } from '@/lib/dates';
 import { progressOf, computeAward, levelOf, xpToday } from '@/lib/economy';
-import { settleDay, adjustBalance, elapsedOf, notify, resolveRedemption } from '@/lib/actions';
+import { settleDay, adjustBalance, elapsedOf, notify, resolveRedemption, removeProof, wasOnTime } from '@/lib/actions';
 import { KUDOS } from '@/lib/tone';
 import { moodEmoji } from '@/lib/mood';
-import { reactionEmoji } from '@/lib/reactions';
 import { Loader, Bar, Sheet, Empty, NumberField, SectionTitle, Lightbox, toast } from '@/components/ui';
-import type { Task, Redemption, Message, Mood } from '@/lib/types';
+import type { Task, Redemption, Mood } from '@/lib/types';
 
 export default function ParentHome() { return <ParentShell><Dashboard /></ParentShell>; }
 
@@ -24,20 +23,17 @@ function Dashboard() {
   const today = todayISO();
   const { tasks, loading, reload } = useDay(child?.id, today);
   const [pending, setPending] = useState<Redemption[]>([]);
-  const [msgs, setMsgs] = useState<Message[]>([]);
   const [mood, setMood] = useState<Mood | null>(null);
   const [kudos, setKudos] = useState(false);
   const [wallet, setWallet] = useState(false);
-  const [mailbox, setMailbox] = useState(false);
-  const [mailboxKey, setMailboxKey] = useState(0);
   const [submitted, setSubmitted] = useState<Task[]>([]);
   const [photo, setPhoto] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = async () => {
     if (!child || !profile) return;
-    const [r, m, mo, sub] = await Promise.all([
+    const [r, mo, sub] = await Promise.all([
       supabase.from('redemptions').select('*').eq('child_id', child.id).eq('status', 'pending').order('created_at'),
-      supabase.from('messages').select('*').eq('to_id', profile.id).is('read_at', null).order('created_at', { ascending: false }).limit(6),
       // Plusieurs humeurs par jour sont possibles depuis v3 : .maybeSingle() échouait
       // dès qu'il y en avait plus d'une, et l'emoji n'apparaissait plus jamais.
       supabase.from('moods').select('*').eq('child_id', child.id).eq('day', today)
@@ -48,47 +44,54 @@ function Dashboard() {
         .order('day').order('completed_at'),
     ]);
     setPending((r.data ?? []) as Redemption[]);
-    setMsgs((m.data ?? []) as Message[]);
     setMood(((mo.data as Mood[]) ?? [])[0] ?? null);
     setSubmitted((sub.data ?? []) as Task[]);
   };
   useEffect(() => { load(); }, [child?.id, profile?.id]);
 
-  useLive(['redemptions', 'messages', 'moods', 'ledger', 'child_items', 'tasks'], load, 'parent-home');
+  useLive(['redemptions', 'moods', 'ledger', 'child_items', 'tasks'], load, 'parent-home');
 
   const doing = useMemo(() => tasks.find((t) => t.status === 'doing'), [tasks]);
-  const late = useMemo(() => tasks.filter((t) => {
-    const m = toMinutes(t.start_time);
-    return t.status === 'todo' && m !== null && nowMinutes() > m + (settings?.parent_alert_after ?? 20);
-  }), [tasks, settings]);
 
   if (loading || !child || !settings || !profile) return <Loader />;
   const prog = progressOf(tasks);
   const lvl = levelOf(child.xp, settings.xp_per_level);
+  const isLate = (t: Task) => {
+    const m = toMinutes(t.start_time);
+    return t.status === 'todo' && m !== null && nowMinutes() > m + (settings.parent_alert_after ?? 20);
+  };
 
+  /**
+   * Garde sur `submitted` : validée depuis un autre écran (ou double appui),
+   * la tâche n'est ni recréditée ni renvoyée une seconde fois. La photo a
+   * servi : elle est supprimée du stockage dans les deux cas.
+   */
   const validate = async (t: Task, ok: boolean) => {
-    // Garde sur `submitted` : validée depuis un autre écran (ou double appui),
-    // la tâche n'est ni recréditée ni renvoyée une seconde fois.
-    if (!ok) {
-      const { data } = await supabase.from('tasks').update({ status: 'todo', completed_at: null, proof_url: null })
-        .eq('id', t.id).eq('status', 'submitted').select('id');
-      if (data?.length) {
-        notify('validation', { taskId: t.id, ok: false, title: t.title });
-        toast('Renvoyée', 'err');
-      } else toast('Déjà traitée');
-    } else {
-      const award = computeAward(settings, t, { onTime: true, streak: child.streak_current });
-      const { data } = await supabase.from('tasks').update({
-        status: 'done', validated_at: new Date().toISOString(),
-        coins_awarded: award.coins, xp_awarded: award.xp,
-      }).eq('id', t.id).eq('status', 'submitted').select('id');
-      if (data?.length) {
-        await settleDay(t, settings, child, award.coins, award.xp, `Tâche : ${t.title}`, t.id);
-        notify('validation', { taskId: t.id, ok: true, title: t.title, coins: award.coins });
-        toast(`+${award.coins} ${settings.currency_emoji}`);
-      } else toast('Déjà traitée');
-    }
-    await Promise.all([reload(), load(), refreshChild()]);
+    setBusyId(t.id);
+    try {
+      if (!ok) {
+        const { data } = await supabase.from('tasks').update({ status: 'todo', completed_at: null, proof_url: null })
+          .eq('id', t.id).eq('status', 'submitted').select('id');
+        if (data?.length) {
+          removeProof(t.proof_url);
+          notify('validation', { taskId: t.id, ok: false, title: t.title });
+          toast('Renvoyée', 'err');
+        } else toast('Déjà traitée');
+      } else {
+        const award = computeAward(settings, t, { onTime: wasOnTime(t), streak: child.streak_current });
+        const { data } = await supabase.from('tasks').update({
+          status: 'done', validated_at: new Date().toISOString(), proof_url: null,
+          coins_awarded: award.coins, xp_awarded: award.xp,
+        }).eq('id', t.id).eq('status', 'submitted').select('id');
+        if (data?.length) {
+          removeProof(t.proof_url);
+          await settleDay(t, settings, child, award.coins, award.xp, `Tâche : ${t.title}`, t.id);
+          notify('validation', { taskId: t.id, ok: true, title: t.title, coins: award.coins });
+          toast(`+${award.coins} ${settings.currency_emoji}`);
+        } else toast('Déjà traitée');
+      }
+      await Promise.all([reload(), load(), refreshChild()]);
+    } finally { setBusyId(null); }
   };
 
   const resolve = async (r: Redemption, approve: boolean) => {
@@ -97,30 +100,23 @@ function Dashboard() {
   };
 
   return (
-    <main className="mx-auto max-w-lg space-y-4 px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
+    <main className="mx-auto max-w-lg space-y-5 px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 1rem)' }}>
       <header className="flex items-center gap-3">
-        <div className="grid h-14 w-14 shrink-0 place-items-center rounded-3xl bg-grape-light text-3xl">
+        <div className="relative grid h-14 w-14 shrink-0 place-items-center rounded-3xl bg-grape-light text-3xl">
           {child.avatar_emoji}
+          {mood && (
+            <span className="absolute -bottom-1 -right-1 grid h-7 w-7 place-items-center rounded-full bg-card text-lg shadow-float"
+                  title="Humeur du jour">{moodEmoji(mood.code, mood.mood)}</span>
+          )}
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-xs font-black uppercase tracking-wide text-muted">{longDate(today)}</p>
-          <h1 className="truncate text-2xl font-black text-ink">{child.display_name}</h1>
+          <h1 className="truncate text-2xl font-black leading-tight text-ink">{child.display_name}</h1>
         </div>
-        {mood && <span className="text-4xl">{moodEmoji(mood.code, mood.mood)}</span>}
+        <ParentInbox />
       </header>
 
       <Presence doing={doing} />
-      <PushManager />
-
-      {!child.push_enabled && (
-        <div className="card flex items-start gap-3 border-2 border-flame/40 bg-flame-light p-4">
-          <span className="text-2xl">🔕</span>
-          <p className="text-sm font-bold leading-snug text-ink">
-            <b className="text-flame-dark">{child.display_name} ne reçoit aucun rappel.</b> Sur son téléphone, ouvre l’app depuis
-            l’icône de l’écran d’accueil et appuie sur « Activer ».
-          </p>
-        </div>
-      )}
 
       <section className="card p-4">
         <div className="grid grid-cols-4 gap-1 text-center">
@@ -142,108 +138,82 @@ function Dashboard() {
       </section>
 
       {!!submitted.length && (
-        <section className="space-y-3">
+        <section>
           <SectionTitle right={<span className="chip !border-sun !bg-sun-light !text-sun-dark">{submitted.length}</span>}>
             👁️ À valider
           </SectionTitle>
-          {submitted.map((t) => (
-            <div key={t.id} className="card p-4">
-              <p className="font-extrabold leading-snug text-ink">{t.title}</p>
-              <p className="mt-1 text-xs font-bold text-muted">
-                {t.day !== today && <span className="capitalize">{relativeDay(t.day)} · </span>}
-                {Math.round(elapsedOf(t) / 60)} min travaillées
-              </p>
-              {t.proof_url && (
-                <button onClick={() => setPhoto(t.proof_url)} className="relative mt-3 block w-full overflow-hidden rounded-3xl bg-soft">
-                  <img src={t.proof_url} alt="Photo envoyée" className="max-h-72 w-full object-contain" />
-                  <span className="absolute bottom-2 right-2 rounded-full bg-ink/70 px-3 py-1 text-xs font-black text-white backdrop-blur">🔍 Agrandir</span>
-                </button>
-              )}
-              <div className="mt-3 flex gap-2.5">
-                <button onClick={() => validate(t, false)} className="btn-flame flex-1">❌ Refaire</button>
-                <button onClick={() => validate(t, true)} className="btn-leaf flex-1">✅ Valider</button>
+          <div className="space-y-3">
+            {submitted.map((t) => (
+              <div key={t.id} className="card p-4">
+                <p className="font-extrabold leading-snug text-ink">{t.title}</p>
+                <p className="mt-1 text-xs font-bold text-muted">
+                  {t.day !== today && <span className="capitalize">{relativeDay(t.day)} · </span>}
+                  {Math.round(elapsedOf(t) / 60)} min travaillées · {t.coins} {settings.currency_emoji}
+                </p>
+                {t.proof_url ? (
+                  <button onClick={() => setPhoto(t.proof_url)} className="relative mt-3 block w-full overflow-hidden rounded-3xl bg-soft">
+                    <img src={t.proof_url} alt="Photo envoyée" className="max-h-56 w-full object-contain" />
+                    <span className="absolute bottom-2 right-2 rounded-full bg-ink/70 px-3 py-1 text-xs font-black text-white backdrop-blur">🔍 Agrandir</span>
+                  </button>
+                ) : <p className="mt-3 rounded-2xl bg-soft px-4 py-3 text-sm font-bold text-muted">Pas de photo</p>}
+                <div className="mt-3 flex gap-2.5">
+                  <button onClick={() => validate(t, false)} disabled={busyId === t.id} className="btn-flame flex-1">↩️ À refaire</button>
+                  <button onClick={() => validate(t, true)} disabled={busyId === t.id} className="btn-leaf flex-1">✅ Valider</button>
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </section>
       )}
 
       {!!pending.length && (
-        <section className="space-y-3">
-          <p className="text-lg font-black text-ink">🎁 Demandes</p>
-          {pending.map((r) => (
-            <div key={r.id} className="card flex items-center gap-3 p-4">
-              <span className="text-4xl">{r.reward_emoji}</span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-extrabold text-ink">{r.reward_name}</p>
-                <p className="text-sm font-bold text-muted">{r.cost_paid} {settings.currency_emoji}</p>
+        <section>
+          <SectionTitle>🎁 Demandes</SectionTitle>
+          <div className="space-y-2.5">
+            {pending.map((r) => (
+              <div key={r.id} className="card flex items-center gap-3 p-4">
+                <span className="text-4xl">{r.reward_emoji}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-extrabold text-ink">{r.reward_name}</p>
+                  <p className="text-sm font-bold text-muted">{r.cost_paid} {settings.currency_emoji}</p>
+                </div>
+                <button onClick={() => resolve(r, false)} aria-label="Refuser"
+                        className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-flame-light text-xl no-select active:scale-90">❌</button>
+                <button onClick={() => resolve(r, true)} aria-label="Accorder"
+                        className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-leaf-light text-xl no-select active:scale-90">✅</button>
               </div>
-              <button onClick={() => resolve(r, false)} className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-flame-light text-xl no-select active:scale-90">❌</button>
-              <button onClick={() => resolve(r, true)} className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-leaf-light text-xl no-select active:scale-90">✅</button>
-            </div>
-          ))}
-        </section>
-      )}
-
-      {!!msgs.length && (
-        <section className="space-y-2.5">
-          {msgs.map((m) => (
-            <div key={m.id} className={clsx('card flex items-start gap-3 p-4', m.kind === 'blocked' && 'border-2 border-sun bg-sun-light')}>
-              <span className="text-2xl">{m.emoji ?? '💬'}</span>
-              <div className="min-w-0 flex-1">
-                {m.kind === 'blocked' && <p className="text-xs font-black uppercase tracking-wide text-sun-dark">{child.display_name} bloque</p>}
-                <p className="font-bold leading-snug text-ink">{m.body}</p>
-                <p className="mt-1 text-xs font-bold text-muted">
-                  {new Date(m.created_at).toLocaleString('fr-FR', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}
-                </p>
-              </div>
-              <button className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs font-black text-grape shadow-float no-select active:scale-95"
-                      onClick={async () => {
-                        setMsgs((list) => list.filter((x) => x.id !== m.id));
-                        await supabase.from('messages').update({ read_at: new Date().toISOString() }).eq('id', m.id);
-                      }}>
-                ✓ Lu
-              </button>
-            </div>
-          ))}
-        </section>
-      )}
-
-      {!!late.length && (
-        <section className="card border-2 border-flame/40 bg-flame-light p-4">
-          <p className="font-black text-flame-dark">⏰ Pas encore commencé</p>
-          <ul className="mt-2 space-y-1">
-            {late.map((t) => (
-              <li key={t.id} className="text-sm font-bold text-ink">
-                {hhmm(t.start_time)} · {t.title} <span className="text-flame-dark">· {nowMinutes() - toMinutes(t.start_time)!} min de retard</span>
-              </li>
             ))}
-          </ul>
+          </div>
         </section>
       )}
 
       <section>
-        <SectionTitle>📋 Sa journée</SectionTitle>
+        <SectionTitle right={<Link href="/parent/agenda" className="chip !border-grape !text-grape">Agenda ›</Link>}>
+          📋 Sa journée
+        </SectionTitle>
         {tasks.length === 0 ? (
           <Empty emoji="📭" title="Rien de prévu" hint="Ajoute une tâche ou une routine depuis l’agenda."
                  action={<Link href="/parent/agenda" className="btn-grape">➕ Ajouter une tâche</Link>} />
         ) : (
-          <ul className="space-y-2">
-            {tasks.map((t) => (
-              <li key={t.id} className="card flex items-center gap-3 px-4 py-3">
-                <span className="w-12 shrink-0 text-sm font-black tabular-nums text-ink">{t.start_time ? hhmm(t.start_time) : 'libre'}</span>
-                <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full" style={{ background: t.subject?.color ?? '#7C4DEE' }} />
-                <span className={clsx('flex-1 truncate font-bold text-ink', t.status === 'done' && 'text-muted line-through')}>{t.title}</span>
-                {/* Seul accès à la photo d'une tâche validée sans passer par « À valider ». */}
-                {t.proof_url && (
-                  <button onClick={() => setPhoto(t.proof_url)} aria-label="Voir la photo"
-                          className="grid h-9 w-9 shrink-0 place-items-center rounded-2xl bg-grape-light text-lg no-select active:scale-90">📷</button>
-                )}
-                <span className="shrink-0 text-xl">
-                  {t.status === 'done' ? '✅' : t.status === 'doing' ? '▶️' : t.status === 'submitted' ? '⏳' : t.status === 'missed' ? '⌛' : '⬜'}
-                </span>
-              </li>
-            ))}
+          <ul className="card divide-y-2 divide-line overflow-hidden">
+            {tasks.map((t) => {
+              const late = isLate(t);
+              return (
+                <li key={t.id} className="flex items-center gap-3 px-4 py-3">
+                  <span className={clsx('w-12 shrink-0 text-sm font-black tabular-nums', late ? 'text-flame' : 'text-ink')}>
+                    {t.start_time ? hhmm(t.start_time) : 'libre'}
+                  </span>
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: t.subject?.color ?? '#7C4DEE' }} />
+                  <span className={clsx('min-w-0 flex-1 truncate font-bold text-ink', t.status === 'done' && 'text-muted line-through')}>
+                    {t.title}
+                  </span>
+                  {late ? <span className="shrink-0 rounded-full bg-flame-light px-2 py-0.5 text-[11px] font-black text-flame-dark">en retard</span>
+                    : <span className="shrink-0 text-lg">
+                        {t.status === 'done' ? '✅' : t.status === 'doing' ? '▶️' : t.status === 'submitted' ? '⏳' : t.status === 'missed' ? '⌛' : '⬜'}
+                      </span>}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
@@ -252,13 +222,9 @@ function Dashboard() {
         <button onClick={() => setKudos(true)} className="btn-rose flex-1">💜 Encourager</button>
         <Link href="/parent/agenda" className="btn-grape flex-1">➕ Tâche</Link>
       </div>
-      <button onClick={() => setMailbox(true)} className="btn-plain w-full">✉️ Envoyer un message</button>
-
-      <Mailbox childId={child.id} refreshKey={mailboxKey} />
 
       <KudosSheet open={kudos} onClose={() => setKudos(false)} />
       <WalletSheet open={wallet} onClose={() => setWallet(false)} />
-      <MessageSheet open={mailbox} onClose={() => setMailbox(false)} onSent={() => setMailboxKey((k) => k + 1)} />
       <Lightbox src={photo} onClose={() => setPhoto(null)} />
     </main>
   );
@@ -384,73 +350,5 @@ function KudosSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
         </button>
       </div>
     </Sheet>
-  );
-}
-
-/* ------------------------------------------------------------ boîte aux lettres */
-function MessageSheet({ open, onClose, onSent }: { open: boolean; onClose: () => void; onSent: () => void }) {
-  const { profile, child } = useApp();
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const send = async () => {
-    if (!profile || !child || !text.trim()) return;
-    setBusy(true);
-    try {
-      await supabase.from('messages').insert({ from_id: profile.id, to_id: child.id, kind: 'message', body: text.trim(), emoji: '✉️' });
-      await notify('message', { body: text.trim() });
-      setText(''); onClose(); onSent();
-      toast('Message envoyé');
-    } catch { toast('Non envoyé', 'err'); }
-    finally { setBusy(false); }
-  };
-
-  return (
-    <Sheet open={open} onClose={onClose} title="Envoyer un message"
-           footer={<button onClick={send} disabled={busy || !text.trim()} className="btn-grape btn-lg w-full">Envoyer</button>}>
-      <textarea className="field min-h-[140px]" value={text} onChange={(e) => setText(e.target.value)}
-                placeholder="Écris ton message…" autoFocus />
-    </Sheet>
-  );
-}
-
-/** Historique des messages envoyés, avec accusé de lecture. */
-function Mailbox({ childId, refreshKey }: { childId: string; refreshKey: number }) {
-  const [sent, setSent] = useState<Message[]>([]);
-
-  const load = useCallback(async () => {
-    const { data } = await supabase.from('messages').select('*')
-      .eq('to_id', childId).eq('kind', 'message').order('created_at', { ascending: false }).limit(10);
-    setSent((data ?? []) as Message[]);
-  }, [childId]);
-
-  useEffect(() => { load(); }, [load, refreshKey]);
-  useLive(['messages'], load, 'parent-mailbox');
-
-  if (!sent.length) return null;
-
-  return (
-    <section>
-      <p className="mb-3 text-lg font-black text-ink">📬 Mes envois</p>
-      <ul className="space-y-2.5">
-        {sent.map((m) => (
-          <li key={m.id} className="card flex items-start gap-3 p-3.5">
-            <span className="text-2xl">✉️</span>
-            <div className="min-w-0 flex-1">
-              <p className="font-bold text-ink">{m.body}</p>
-              <p className="mt-0.5 text-xs font-bold text-muted">
-                {new Date(m.created_at).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-              </p>
-            </div>
-            <div className="flex shrink-0 flex-col items-end gap-1">
-              <span className={clsx('text-xs font-black', m.read_at ? 'text-leaf' : 'text-muted')}>
-                {m.read_at ? '✓✓ Lu' : '✓ Envoyé'}
-              </span>
-              {m.reaction && <span className="text-xl">{reactionEmoji(m.reaction)}</span>}
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
   );
 }

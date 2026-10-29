@@ -11,6 +11,7 @@ import Help, { LabelHelp } from '@/components/Help';
 import { resetChildAccount } from '@/lib/reset';
 import { Loader, SegmentedTabs, Toggle, NumberField, Sheet, toast } from '@/components/ui';
 import LevelRoad from '@/components/LevelRoad';
+import PushManager from '@/components/PushManager';
 import type { Reward } from '@/lib/types';
 import type { Settings, Tone, ParentNotifKind, ChildNotifKind } from '@/lib/types';
 
@@ -77,7 +78,8 @@ const CHILD_NOTIFS: { k: ChildNotifKind; emoji: string; label: string }[] = [
 function Rules() {
   const { settings, refresh, signOut, child } = useApp();
   const [s, setS] = useState<Settings | null>(null);
-  const [tab, setTab] = useState<'eco' | 'xp' | 'rules' | 'notif' | 'goal'>('eco');
+  const [tab, setTab] = useState<'eco' | 'notif' | 'goal'>('eco');
+  const [advanced, setAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const [dirty, setDirty] = useState(false);
@@ -104,12 +106,10 @@ function Rules() {
       <SecretResetTitle />
 
       <div className="mt-4">
-        <SegmentedTabs value={tab} onChange={setTab} options={[
+        <SegmentedTabs value={tab} onChange={(t) => { setTab(t); setAdvanced(false); }} options={[
           { value: 'eco',   label: '💰 Points' },
-          { value: 'xp',    label: '⚡ XP' },
-          { value: 'rules', label: '🛡️ Règles' },
-          { value: 'notif', label: '🔔 Notifs' },
-          { value: 'goal',  label: '🎯 Cadre' },
+          { value: 'notif', label: '🔔 Rappels' },
+          { value: 'goal',  label: '⚙️ Général' },
         ]} />
       </div>
 
@@ -135,18 +135,6 @@ function Rules() {
               </div>
             </div>
 
-            <Num k="base_coins" label="Points de base par tâche"
-                 help={<>
-                   <p>Chaque tâche rapporte ce montant de départ, quelle que soit sa durée.</p>
-                   <p>La formule complète est : <b>base + (points par 10 min × durée) × difficulté</b>.</p>
-                   <p>Augmenter cette valeur récompense surtout le fait de <b>commencer</b> une tâche, pas d’y passer du temps.</p>
-                 </>} />
-            <Num k="coins_per_10min" label="Points par 10 minutes"
-                 help={<>
-                   <p>S’ajoute au montant de base, proportionnellement à la durée prévue.</p>
-                   <p>Augmenter cette valeur récompense les <b>tâches longues</b>. À l’inverse, la baisser met tout le monde à égalité et pousse à enchaîner les petites tâches.</p>
-                 </>} />
-
             <div className="card bg-soft p-4">
               <p className="mb-3 font-black text-ink">Ce que ça donne</p>
               <ul className="space-y-2">
@@ -158,6 +146,28 @@ function Rules() {
                 ))}
               </ul>
             </div>
+
+            <button onClick={() => setAdvanced((v) => !v)}
+                    className="flex w-full items-center justify-between rounded-3xl border-2 border-line bg-card px-4 py-3.5 font-extrabold text-ink">
+              <span>🛠️ Réglages avancés</span>
+              <span className="text-muted">{advanced ? '▴' : '▾'}</span>
+            </button>
+          </>
+        )}
+
+        {tab === 'eco' && advanced && (
+          <>
+            <Num k="base_coins" label="Points de base par tâche"
+                 help={<>
+                   <p>Chaque tâche rapporte ce montant de départ, quelle que soit sa durée.</p>
+                   <p>La formule complète est : <b>base + (points par 10 min × durée) × difficulté</b>.</p>
+                   <p>Augmenter cette valeur récompense surtout le fait de <b>commencer</b> une tâche, pas d’y passer du temps.</p>
+                 </>} />
+            <Num k="coins_per_10min" label="Points par 10 minutes"
+                 help={<>
+                   <p>S’ajoute au montant de base, proportionnellement à la durée prévue.</p>
+                   <p>Augmenter cette valeur récompense les <b>tâches longues</b>. À l’inverse, la baisser met tout le monde à égalité et pousse à enchaîner les petites tâches.</p>
+                 </>} />
 
             <Num k="punctuality_bonus_pct" label="Bonus ponctualité" suffix="%"
                  help={<>
@@ -178,7 +188,7 @@ function Rules() {
           </>
         )}
 
-        {tab === 'xp' && (
+        {tab === 'eco' && advanced && (
           <>
             <div className="card bg-soft p-4">
               <LabelHelp label="À quoi servent les XP ?" title="Points et XP, quelle différence ?"
@@ -195,7 +205,7 @@ function Rules() {
             <Num k="xp_per_task" label="XP par tâche" suffix="⚡"
                  help={<><p>Multiplié par la difficulté de la tâche, comme les points.</p></>} />
             <Num k="xp_per_quiz_answer" label="XP par bonne réponse" suffix="⚡" />
-            <LevelPace s={s} onGoToEco={() => setTab('eco')} onChange={(v) => { setS({ ...s, ...v }); setDirty(true); }} />
+            <LevelPace s={s} onGoToEco={() => window.scrollTo({ top: 0, behavior: 'smooth' })} onChange={(v) => { setS({ ...s, ...v }); setDirty(true); }} />
             <Num k="level_up_coins" label="Bonus à chaque niveau" suffix={s.currency_emoji} />
             <Num k="daily_xp_goal" label="Objectif XP du jour" suffix="⚡"
                  help={<>
@@ -207,28 +217,27 @@ function Rules() {
           </>
         )}
 
-        {tab === 'rules' && (
+        {tab === 'goal' && (
           <>
-            <Toggle emoji="📷" label="Photo de preuve" checked={s.default_require_photo}
-                    onChange={(v) => set('default_require_photo', v)} />
-            <Toggle emoji="👁️" label="Validation parent" checked={s.default_require_validation}
-                    onChange={(v) => set('default_require_validation', v)} />
-
             <div>
-              <LabelHelp label={`⏱️ Minuteur minimum · ${s.default_min_timer_pct} %`} title="Minuteur minimum"
-                         help={<>
-                           <p>Part de la durée prévue qu’elle doit réellement passer sur la tâche avant que le bouton « J’ai fini » se débloque.</p>
-                           <p>À <b>60 %</b>, une tâche de 45 min se valide au bout de 27 minutes.</p>
-                           <p>À <b>0 %</b>, elle peut cocher instantanément.</p>
-                           <p>Le chrono ne tourne que si l’app est affichée : sortir de l’app le met en pause.</p>
-                         </>} />
-              <input type="range" min={0} max={100} step={10} className="w-full accent-grape"
-                     value={s.default_min_timer_pct} onChange={(e) => set('default_min_timer_pct', Number(e.target.value))} />
-              <p className="mt-2 text-sm font-bold text-muted">
-                Une tâche de 45 min se valide après {Math.round((45 * s.default_min_timer_pct) / 100)} min
-              </p>
+              <label className="label">Objectif de fond</label>
+              <input className="field" value={s.goal_title} onChange={(e) => set('goal_title', e.target.value)} />
             </div>
-
+            <div>
+              <label className="label">Date cible</label>
+              <input type="date" className="field" value={s.goal_date ?? ''} onChange={(e) => set('goal_date', e.target.value || null)} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Time k="day_start" label="Début de journée" />
+              <Time k="day_end" label="Fin de journée" />
+            </div>
+          </>
+        )}
+        {tab === 'goal' && (
+          <>
+            <div className="rounded-3xl bg-grape-light px-4 py-3 text-sm font-bold text-ink">
+              📸 Règle unique : chaque tâche se termine par une photo, et c’est toi qui valides.
+            </div>
             <Num k="max_postpones_per_day" label="Reports par jour"
                  help={<>
                    <p>Nombre de fois où elle peut repousser une tâche dans la journée.</p>
@@ -255,11 +264,15 @@ function Rules() {
               <Toggle emoji="📸" label="Elle peut créer ses propres quiz"
                       checked={s.child_can_create_quiz} onChange={(v) => set('child_can_create_quiz', v)} />
             </div>
+            <button onClick={() => { if (confirm('Se déconnecter de cet appareil ?')) signOut(); }} className="btn-plain w-full">
+              Se déconnecter de cet appareil
+            </button>
           </>
         )}
 
         {tab === 'notif' && (
           <>
+            <PushManager />
             <div>
               <label className="label">Ton des messages</label>
               <div className="grid grid-cols-2 gap-2.5">
@@ -338,26 +351,6 @@ function Rules() {
           </>
         )}
 
-        {tab === 'goal' && (
-          <>
-            <div>
-              <label className="label">Objectif de fond</label>
-              <input className="field" value={s.goal_title} onChange={(e) => set('goal_title', e.target.value)} />
-            </div>
-            <div>
-              <label className="label">Date cible</label>
-              <input type="date" className="field" value={s.goal_date ?? ''} onChange={(e) => set('goal_date', e.target.value || null)} />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <Time k="day_start" label="Début de journée" />
-              <Time k="day_end" label="Fin de journée" />
-            </div>
-            <div className="card p-4">
-              <p className="font-extrabold text-ink">👧 {child?.display_name ?? '—'}</p>
-            </div>
-            <button onClick={() => { if (confirm('Se déconnecter de cet appareil ?')) signOut(); }} className="btn-plain w-full">Se déconnecter</button>
-          </>
-        )}
       </div>
 
       {dirty ? (

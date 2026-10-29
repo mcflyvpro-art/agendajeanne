@@ -47,14 +47,11 @@ export function levelOf(xp: number, perLevel: number): LevelInfo {
   };
 }
 
-/** Durée minimale de travail avant de pouvoir valider (en secondes). */
-export function minTimerSeconds(s: Settings, task: Task): number {
-  const pct = task.min_timer_pct ?? s.default_min_timer_pct;
-  return Math.round((task.duration_min * 60 * pct) / 100);
-}
-
-export const requiresPhoto = (s: Settings, t: Task) => t.require_photo ?? s.default_require_photo;
-export const requiresValidation = (s: Settings, t: Task) => t.require_validation ?? s.default_require_validation;
+/*
+ * Règle unique, volontairement simple : toute tâche se termine par une photo
+ * et part en validation chez le parent. Plus de minuteur minimum ni de règle
+ * au cas par cas (les colonnes existent encore en base mais ne sont plus lues).
+ */
 
 /** Un jour compte pour la série si toutes les tâches non facultatives sont faites. */
 export function dayIsComplete(tasks: Task[]): boolean {

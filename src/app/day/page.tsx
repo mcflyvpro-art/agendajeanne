@@ -53,7 +53,7 @@ function Day() {
 
 const STATUS: Partial<Record<Task['status'], { icon: string; label: string; cls: string }>> = {
   done:      { icon: '✅', label: 'Fait',        cls: 'text-leaf-dark' },
-  submitted: { icon: '⏳', label: 'À valider',   cls: 'text-sun-dark' },
+  submitted: { icon: '⏳', label: 'Envoyée',     cls: 'text-sun-dark' },
   doing:     { icon: '▶️', label: 'En cours',    cls: 'text-grape' },
   missed:    { icon: '⌛', label: 'Manquée',     cls: 'text-flame' },
   skipped:   { icon: '⤼', label: 'Annulée',     cls: 'text-muted' },
