@@ -28,12 +28,13 @@ export function elapsedOf(task: Task): number {
 }
 
 export async function startTask(task: Task) {
-  await supabase.from('tasks').update({
+  const { error } = await supabase.from('tasks').update({
     status: 'doing',
     started_at: task.started_at ?? new Date().toISOString(),
     timer_running: true,
     timer_segment_at: new Date().toISOString(),
   }).eq('id', task.id);
+  if (error) throw error;
 }
 
 /** Met le chrono en pause et fige le total. Appelé dès que l'enfant quitte la page. */
@@ -50,23 +51,26 @@ export async function resumeTimer(taskId: string, seconds: number) {
 }
 
 export async function toggleSubtask(id: string, done: boolean) {
-  await supabase.from('subtasks').update({ done }).eq('id', id);
+  const { error } = await supabase.from('subtasks').update({ done }).eq('id', id);
+  if (error) throw error;
 }
 
 export async function postponeTask(task: Task, s: Settings) {
   const cur = toMinutes(task.start_time) ?? nowMinutes();
-  await supabase.from('tasks').update({
+  const { error } = await supabase.from('tasks').update({
     start_time: fromMinutes(cur + s.postpone_minutes),
     postpone_count: task.postpone_count + 1,
     reminders_sent: [], parent_alerted: false,
   }).eq('id', task.id);
+  if (error) throw error;
 }
 
 /** L'enfant place elle-même une tâche libre dans sa journée. */
 export async function scheduleTask(taskId: string, time: string) {
-  await supabase.from('tasks').update({
+  const { error } = await supabase.from('tasks').update({
     start_time: time, reminders_sent: [], parent_alerted: false,
   }).eq('id', taskId);
+  if (error) throw error;
 }
 
 export async function reportBlocked(task: Task, note: string, childId: string) {

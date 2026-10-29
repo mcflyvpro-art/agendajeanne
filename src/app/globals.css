@@ -4,6 +4,7 @@
 
 :root { color-scheme: light; }
 
+html { touch-action: manipulation; }
 html, body {
   background: #FAF7FF;
   color: #2E2445;
@@ -27,6 +28,8 @@ button, a, input, textarea, select { outline: none; -webkit-tap-highlight-color:
 button::-moz-focus-inner { border: 0; }
 .no-select { -webkit-user-select: none; user-select: none; }
 .press { transition: transform .12s ease; }
+/* Un retour visible à chaque tap, même sur les boutons sans style d'appui. */
+button:not(:disabled):active, a:active { filter: brightness(.95); }
 .press:active { transform: scale(.97); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

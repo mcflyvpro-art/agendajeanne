@@ -13,7 +13,7 @@ import { progressOf, computeAward, levelOf, xpToday } from '@/lib/economy';
 import { settleDay, adjustBalance, elapsedOf, notify, resolveRedemption, removeProof, wasOnTime } from '@/lib/actions';
 import { KUDOS } from '@/lib/tone';
 import { moodEmoji } from '@/lib/mood';
-import { Loader, Bar, Sheet, Empty, NumberField, SectionTitle, Lightbox, toast } from '@/components/ui';
+import { Loader, Bar, Sheet, Empty, NumberField, SectionTitle, Lightbox, useAction, toast } from '@/components/ui';
 import type { Task, Redemption, Mood } from '@/lib/types';
 
 export default function ParentHome() { return <ParentShell><Dashboard /></ParentShell>; }
@@ -95,8 +95,13 @@ function Dashboard() {
   };
 
   const resolve = async (r: Redemption, approve: boolean) => {
-    if (!(await resolveRedemption(r, approve, profile.id))) toast('Déjà traitée');
-    await Promise.all([load(), refreshChild()]);
+    if (busyId) return;
+    setBusyId(r.id);
+    try {
+      if (!(await resolveRedemption(r, approve, profile.id))) toast('Déjà traitée');
+      else toast(approve ? 'Accordée 🎁' : 'Refusée, points rendus');
+      await Promise.all([load(), refreshChild()]);
+    } finally { setBusyId(null); }
   };
 
   return (
@@ -177,9 +182,9 @@ function Dashboard() {
                   <p className="truncate font-extrabold text-ink">{r.reward_name}</p>
                   <p className="text-sm font-bold text-muted">{r.cost_paid} {settings.currency_emoji}</p>
                 </div>
-                <button onClick={() => resolve(r, false)} aria-label="Refuser"
+                <button onClick={() => resolve(r, false)} aria-label="Refuser" disabled={busyId === r.id}
                         className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-flame-light text-xl no-select active:scale-90">❌</button>
-                <button onClick={() => resolve(r, true)} aria-label="Accorder"
+                <button onClick={() => resolve(r, true)} aria-label="Accorder" disabled={busyId === r.id}
                         className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-leaf-light text-xl no-select active:scale-90">✅</button>
               </div>
             ))}
@@ -277,16 +282,17 @@ function WalletSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
   const { child, settings, refreshChild } = useApp();
   const [amount, setAmount] = useState(0);
   const [reason, setReason] = useState('');
+  const [busy, run] = useAction();
   if (!child || !settings) return null;
 
-  const apply = async (sign: number) => {
+  const apply = (sign: number) => run(async () => {
     const n = Math.abs(amount);
     if (!n) { toast('Indique un montant', 'err'); return; }
     await adjustBalance(child, sign * n, reason);
     await refreshChild();
     setAmount(0); setReason(''); onClose();
     toast(`${sign > 0 ? '+' : '−'}${n} ${settings.currency_emoji}`);
-  };
+  });
 
   return (
     <Sheet open={open} onClose={onClose} title="Modifier le solde">
@@ -303,8 +309,8 @@ function WalletSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
         </div>
         <input className="field" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Motif (facultatif)" />
         <div className="flex gap-2.5">
-          <button onClick={() => apply(-1)} className="btn-flame flex-1">− Retirer</button>
-          <button onClick={() => apply(1)} className="btn-leaf flex-1">+ Ajouter</button>
+          <button onClick={() => apply(-1)} disabled={busy} className="btn-flame flex-1">− Retirer</button>
+          <button onClick={() => apply(1)} disabled={busy} className="btn-leaf flex-1">+ Ajouter</button>
         </div>
       </div>
     </Sheet>

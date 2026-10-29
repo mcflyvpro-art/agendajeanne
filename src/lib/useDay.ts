@@ -40,7 +40,17 @@ export function useDay(childId: string | undefined, day: string) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `child_id=eq.${childId}` }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'subtasks' }, load)
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+    // Le temps réel perd les événements pendant que l'iPhone met l'app en
+    // veille : sans ce rechargement, l'écran restait figé sur un état périmé
+    // au retour, et certains taps semblaient ne rien faire.
+    const wake = () => { if (document.visibilityState === 'visible') load(); };
+    document.addEventListener('visibilitychange', wake);
+    window.addEventListener('online', wake);
+    return () => {
+      supabase.removeChannel(ch);
+      document.removeEventListener('visibilitychange', wake);
+      window.removeEventListener('online', wake);
+    };
   }, [childId, day, load]);
 
   return { tasks, loading, reload: load };

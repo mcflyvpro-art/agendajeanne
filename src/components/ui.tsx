@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 
 /**
@@ -24,6 +24,25 @@ export function Loader() {
       {slow > 1 && <button onClick={() => location.reload()} className="btn-plain animate-rise text-sm">Recharger</button>}
     </div>
   );
+}
+
+/**
+ * Action asynchrone lancée par un bouton : retour visuel immédiat et double
+ * appui ignoré. Sans ça, un tap pendant l'aller-retour serveur semblait ne
+ * rien faire, et on tapait de nouveau.
+ */
+export function useAction() {
+  const [busy, setBusy] = useState(false);
+  const lock = useRef(false);
+  const run = useCallback(async (fn: () => Promise<unknown>) => {
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    try { await fn(); }
+    catch (e: any) { toast(/fetch|network/i.test(e?.message ?? '') ? 'Pas de connexion, réessaie' : 'Ça n’a pas marché, réessaie', 'err'); }
+    finally { lock.current = false; setBusy(false); }
+  }, []);
+  return [busy, run] as const;
 }
 
 /** Titre de page, identique partout. */

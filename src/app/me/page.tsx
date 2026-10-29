@@ -110,8 +110,9 @@ function Me() {
           {contract.status === 'proposed' ? (
             <button className="btn-grape mt-4 w-full"
                     onClick={async () => {
-                      await supabase.from('contracts').update({ status: 'accepted' }).eq('id', contract.id);
-                      setContract({ ...contract, status: 'accepted' }); toast('Contrat accepté');
+                      setContract({ ...contract, status: 'accepted' });
+                      const { error } = await supabase.from('contracts').update({ status: 'accepted' }).eq('id', contract.id);
+                      if (error) { setContract(contract); toast('Pas enregistré, réessaie', 'err'); } else toast('Contrat accepté');
                     }}>
               J’accepte
             </button>
@@ -212,9 +213,11 @@ function Me() {
           {items.filter((i) => i.item_type === 'avatar').map((i) => (
             <button key={i.id}
                     onClick={async () => {
-                      await supabase.from('profiles').update({ avatar_emoji: i.item_value }).eq('id', profile.id);
-                      await refresh();
+                      // Fermeture immédiate : le changement s'enregistre derrière.
                       setPickAvatar(false);
+                      const { error } = await supabase.from('profiles').update({ avatar_emoji: i.item_value }).eq('id', profile.id);
+                      if (error) toast('Pas enregistré, réessaie', 'err');
+                      await refresh();
                     }}
                     className={clsx('grid aspect-square place-items-center rounded-3xl border-2 text-4xl no-select transition active:scale-90',
                       profile.avatar_emoji === i.item_value ? 'border-grape bg-grape-light' : 'border-line bg-card')}>
