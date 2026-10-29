@@ -8,7 +8,7 @@ import { supabase } from '@/lib/supabase';
 import { useLive } from '@/lib/useLive';
 import { AVATAR_CHOICES } from '@/lib/avatars';
 import { weekStart, todayISO } from '@/lib/dates';
-import { notify } from '@/lib/actions';
+import { notify, resolveRedemption } from '@/lib/actions';
 import { Loader, Sheet, Empty, SegmentedTabs, NumberField, toast } from '@/components/ui';
 import type { Reward, Redemption, Contract } from '@/lib/types';
 
@@ -87,17 +87,7 @@ function Rewards() {
   };
 
   const resolve = async (r: Redemption, approve: boolean) => {
-    await supabase.from('redemptions').update({ status: approve ? 'approved' : 'refused', resolved_at: new Date().toISOString() }).eq('id', r.id);
-    if (!approve) {
-      await supabase.from('profiles').update({ coins: child.coins + r.cost_paid }).eq('id', child.id);
-      await supabase.from('ledger').insert({ child_id: child.id, amount: r.cost_paid, reason: `Annulé : ${r.reward_name}`, kind: 'reward' });
-    }
-    await supabase.from('messages').insert({
-      from_id: profile!.id, to_id: child.id, kind: 'system',
-      body: approve ? `${r.reward_name} accordée !` : `${r.reward_name} refusée, points rendus.`,
-      emoji: approve ? '🎁' : '↩️',
-    });
-    notify('kudos', { body: approve ? `${r.reward_name} accordée ! 🎁` : `${r.reward_name} refusée`, emoji: approve ? '🎁' : '↩️' });
+    if (!(await resolveRedemption(r, approve, profile!.id))) toast('Déjà traitée');
     await Promise.all([load(), refreshChild()]);
   };
 

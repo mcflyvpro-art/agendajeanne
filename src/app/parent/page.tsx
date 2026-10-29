@@ -10,7 +10,7 @@ import { useDay } from '@/lib/useDay';
 import { useLive } from '@/lib/useLive';
 import { todayISO, hhmm, nowMinutes, toMinutes, longDate, relativeDay } from '@/lib/dates';
 import { progressOf, computeAward, levelOf, xpToday } from '@/lib/economy';
-import { settleDay, adjustBalance, elapsedOf, notify } from '@/lib/actions';
+import { settleDay, adjustBalance, elapsedOf, notify, resolveRedemption } from '@/lib/actions';
 import { KUDOS } from '@/lib/tone';
 import { moodEmoji } from '@/lib/mood';
 import { reactionEmoji } from '@/lib/reactions';
@@ -67,39 +67,32 @@ function Dashboard() {
   const lvl = levelOf(child.xp, settings.xp_per_level);
 
   const validate = async (t: Task, ok: boolean) => {
+    // Garde sur `submitted` : validée depuis un autre écran (ou double appui),
+    // la tâche n'est ni recréditée ni renvoyée une seconde fois.
     if (!ok) {
-      await supabase.from('tasks').update({ status: 'todo', completed_at: null, proof_url: null }).eq('id', t.id);
-      notify('validation', { taskId: t.id, ok: false, title: t.title });
-      toast('Renvoyée', 'err');
+      const { data } = await supabase.from('tasks').update({ status: 'todo', completed_at: null, proof_url: null })
+        .eq('id', t.id).eq('status', 'submitted').select('id');
+      if (data?.length) {
+        notify('validation', { taskId: t.id, ok: false, title: t.title });
+        toast('Renvoyée', 'err');
+      } else toast('Déjà traitée');
     } else {
       const award = computeAward(settings, t, { onTime: true, streak: child.streak_current });
-      await supabase.from('tasks').update({
+      const { data } = await supabase.from('tasks').update({
         status: 'done', validated_at: new Date().toISOString(),
         coins_awarded: award.coins, xp_awarded: award.xp,
-      }).eq('id', t.id);
-      await settleDay(t, settings, child, award.coins, award.xp, `Tâche : ${t.title}`, t.id);
-      notify('validation', { taskId: t.id, ok: true, title: t.title, coins: award.coins });
-      toast(`+${award.coins} ${settings.currency_emoji}`);
+      }).eq('id', t.id).eq('status', 'submitted').select('id');
+      if (data?.length) {
+        await settleDay(t, settings, child, award.coins, award.xp, `Tâche : ${t.title}`, t.id);
+        notify('validation', { taskId: t.id, ok: true, title: t.title, coins: award.coins });
+        toast(`+${award.coins} ${settings.currency_emoji}`);
+      } else toast('Déjà traitée');
     }
     await Promise.all([reload(), load(), refreshChild()]);
   };
 
   const resolve = async (r: Redemption, approve: boolean) => {
-    await supabase.from('redemptions').update({
-      status: approve ? 'approved' : 'refused', resolved_at: new Date().toISOString(),
-    }).eq('id', r.id);
-    if (!approve) {
-      await supabase.from('profiles').update({ coins: child.coins + r.cost_paid }).eq('id', child.id);
-      await supabase.from('ledger').insert({
-        child_id: child.id, amount: r.cost_paid, reason: `Annulé : ${r.reward_name}`, kind: 'reward',
-      });
-    }
-    await supabase.from('messages').insert({
-      from_id: profile.id, to_id: child.id, kind: 'system',
-      body: approve ? `${r.reward_name} accordée !` : `${r.reward_name} refusée, points rendus.`,
-      emoji: approve ? '🎁' : '↩️',
-    });
-    notify('kudos', { body: approve ? `${r.reward_name} accordée ! 🎁` : `${r.reward_name} refusée`, emoji: approve ? '🎁' : '↩️' });
+    if (!(await resolveRedemption(r, approve, profile.id))) toast('Déjà traitée');
     await Promise.all([load(), refreshChild()]);
   };
 

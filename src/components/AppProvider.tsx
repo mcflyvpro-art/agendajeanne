@@ -1,7 +1,7 @@
 'use client';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabase';
+import { supabase, jwtIat } from '@/lib/supabase';
 import type { Profile, Settings, Subject } from '@/lib/types';
 
 interface Ctx {
@@ -29,13 +29,16 @@ const PARENT_IDLE_MS = 5 * 60 * 1000;
 const isJwtError = (e: { code?: string; message?: string } | null) =>
   !!e && (/^PGRST30/.test(e.code ?? '') || /jwt/i.test(e.message ?? ''));
 
-/**
- * Attentes successives quand le jeton est daté dans le futur : l'horloge du
- * serveur d'authentification avance sur celle de l'API, et le jeton devient
- * valable dès que l'API a rattrapé ce décalage.
- */
-const FUTURE_JWT_WAITS = [2000, 4000, 8000, 15000];
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Message lisible, avec l'avance mesurée du serveur quand le jeton est daté dans le futur. */
+async function describeLoadError(message: string): Promise<string> {
+  if (!/future/i.test(message)) return message;
+  const { data } = await supabase.auth.getSession();
+  const iat = jwtIat(data.session?.access_token);
+  if (iat === null) return message;
+  const ahead = Math.round(iat - Date.now() / 1000);
+  return `Le serveur de connexion Supabase a ${ahead} s d’avance sur l’heure réelle, `
+    + `et l’API refuse ses jetons au-delà de 30 s (${message}).`;
+}
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -55,30 +58,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       ]);
       let [p, s, subj] = await fetchCore();
 
-      // Jeton refusé : sans reprise, l'app restait bloquée sur « JWT issued at
-      // future » jusqu'à une déconnexion manuelle. On demande d'abord un jeton
-      // neuf, puis, s'il est encore daté dans le futur, on laisse à l'horloge
-      // de l'API le temps de rattraper celle du serveur d'authentification.
+      // Jeton refusé malgré l'attente faite dans `patientFetch` (jeton expiré,
+      // ou émis pendant un dérèglement d'horloge passé) : sans reprise, l'app
+      // restait bloquée jusqu'à une déconnexion manuelle. Un jeton neuf suffit.
       if (isJwtError(p.error ?? s.error ?? subj.error)) {
         const { data } = await supabase.auth.refreshSession();
         if (!data.session) return; // jeton de rafraîchissement révoqué : SIGNED_OUT renvoie vers la connexion
         [p, s, subj] = await fetchCore();
-        for (const wait of FUTURE_JWT_WAITS) {
-          if (!/future/i.test((p.error ?? s.error ?? subj.error)?.message ?? '')) break;
-          await sleep(wait);
-          [p, s, subj] = await fetchCore();
-        }
       }
 
       // Une erreur ici laissait l'app tourner en boucle sur un écran de
       // chargement : on la remonte pour pouvoir l'afficher.
       const err = p.error ?? s.error ?? subj.error;
-      if (err) {
-        setLoadError(/future/i.test(err.message)
-          ? `L'horloge du serveur Supabase est décalée (${err.message}). Réessaie dans une minute.`
-          : err.message);
-        return;
-      }
+      if (err) { setLoadError(await describeLoadError(err.message)); return; }
       if (!p.data) { setLoadError('Aucun profil associé à ce compte.'); return; }
 
       setLoadError(null);
@@ -201,8 +193,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => document.removeEventListener('visibilitychange', onChange);
   }, [ready, profile?.role]);
 
+  /**
+   * Déconnexion de CET appareil seulement. La portée par défaut (« global »)
+   * révoquait toutes les sessions du compte : se déconnecter du compte de
+   * Jeanne sur le téléphone du parent la déconnectait aussi sur le sien.
+   */
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: 'local' });
     location.href = '/login';
   }, []);
 

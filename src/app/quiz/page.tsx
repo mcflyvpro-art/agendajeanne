@@ -6,7 +6,7 @@ import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
 import { useLive } from '@/lib/useLive';
 import { Loader, Empty, Ring, toast } from '@/components/ui';
-import { checkBadges, notify } from '@/lib/actions';
+import { checkBadges, creditChild, notify } from '@/lib/actions';
 import { compressImage } from '@/lib/image';
 import { levelOf } from '@/lib/economy';
 import type { Quiz, QuizQuestion } from '@/lib/types';
@@ -145,14 +145,16 @@ function Play({ quiz, onExit }: { quiz: Quiz; onExit: () => void }) {
           child_id: profile.id, amount: coins, reason: `Quiz : ${quiz.title}`, kind: 'quiz', ref_id: quiz.id,
         });
       }
-      const newXp = profile.xp + xp;
-      const before = levelOf(profile.xp, settings!.xp_per_level).level;
-      const after = levelOf(newXp, settings!.xp_per_level).level;
-      await supabase.from('profiles').update({
-        coins: profile.coins + coins, xp: newXp, level_reached: after,
-      }).eq('id', profile.id);
-      if (after > before) notify('level_up', { level: after });
-      await checkBadges(profile.id, profile.streak_current, after);
+      // Addition faite sur le solde relu en base, pas sur la copie en mémoire.
+      const up = await creditChild(profile.id, coins, xp);
+      const total = up?.xp ?? profile.xp + xp;
+      const before = levelOf(total - xp, settings!.xp_per_level).level;
+      const after = levelOf(total, settings!.xp_per_level).level;
+      if (after > before) {
+        await supabase.from('profiles').update({ level_reached: after }).eq('id', profile.id);
+        notify('level_up', { level: after });
+      }
+      await checkBadges(profile.id, up?.streak_current ?? profile.streak_current, after);
       notify('quiz_done', { title: quiz.title, score, total: qs.length });
     }
   };

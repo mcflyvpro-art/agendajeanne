@@ -9,7 +9,7 @@ export default function LoadFailure({ message }: { message: string }) {
       <h1 className="text-2xl font-black text-ink">Connexion impossible</h1>
       <p className="font-medium text-muted">{message}</p>
       <button onClick={() => location.reload()} className="btn-grape mt-2">Réessayer</button>
-      <button onClick={async () => { await supabase.auth.signOut(); location.href = '/login'; }}
+      <button onClick={async () => { await supabase.auth.signOut({ scope: 'local' }); location.href = '/login'; }}
               className="btn-plain">Se déconnecter</button>
     </main>
   );

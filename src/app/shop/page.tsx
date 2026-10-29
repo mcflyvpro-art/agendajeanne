@@ -48,7 +48,13 @@ function Shop() {
   const buy = async (r: Reward) => {
     setBusy(true);
     try {
-      if (profile.coins < r.cost) throw new Error('Pas assez');
+      const avatar = r.kind === 'item' && (r.item_type ?? 'avatar') === 'avatar' ? (r.item_value ?? r.emoji) : null;
+      // Débit d'abord, vérifié en base : le solde affiché peut dater d'avant un
+      // mouvement fait sur l'autre appareil. Remboursé si la suite échoue.
+      const paid = await A.creditChild(profile.id, -r.cost, 0, {
+        requireFunds: true, set: avatar ? { avatar_emoji: avatar } : undefined,
+      });
+      if (!paid) throw new Error('Pas assez');
 
       if (r.kind === 'item') {
         // Objet : débloqué tout de suite, sans validation.
@@ -56,23 +62,25 @@ function Shop() {
           child_id: profile.id, reward_id: r.id,
           item_type: r.item_type ?? 'avatar', item_value: r.item_value ?? r.emoji,
         });
-        if (error) throw new Error('Tu l’as déjà');
+        if (error) {
+          await A.creditChild(profile.id, r.cost, 0, { set: avatar ? { avatar_emoji: profile.avatar_emoji } : undefined });
+          throw new Error('Tu l’as déjà');
+        }
         await supabase.from('ledger').insert({
           child_id: profile.id, amount: -r.cost, reason: r.name, kind: 'reward',
         });
-        await supabase.from('profiles').update({
-          coins: profile.coins - r.cost,
-          avatar_emoji: (r.item_type ?? 'avatar') === 'avatar' ? (r.item_value ?? r.emoji) : profile.avatar_emoji,
-        }).eq('id', profile.id);
         toast('Débloqué !');
       } else {
-        await supabase.from('redemptions').insert({
+        const { error } = await supabase.from('redemptions').insert({
           reward_id: r.id, child_id: profile.id, reward_name: r.name, reward_emoji: r.emoji, cost_paid: r.cost,
         });
+        if (error) {
+          await A.creditChild(profile.id, r.cost);
+          throw new Error('Demande non envoyée, réessaie');
+        }
         await supabase.from('ledger').insert({
           child_id: profile.id, amount: -r.cost, reason: r.name, kind: 'reward',
         });
-        await supabase.from('profiles').update({ coins: profile.coins - r.cost }).eq('id', profile.id);
         A.notify('purchase', { reward: r.name, cost: r.cost });
         toast('Demande envoyée');
       }
