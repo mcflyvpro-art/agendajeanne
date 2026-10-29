@@ -14,7 +14,7 @@ import { progressOf, levelOf, xpToday } from '@/lib/economy';
 import { MOOD_SCALE, MOOD_SPECIAL } from '@/lib/mood';
 import { REACTIONS, reactionEmoji } from '@/lib/reactions';
 import * as A from '@/lib/actions';
-import { Loader, Sheet, Ring, Bar, Confetti, toast } from '@/components/ui';
+import { Loader, Sheet, Ring, Bar, Confetti, useAction, toast } from '@/components/ui';
 import type { Task, Message } from '@/lib/types';
 
 export default function NowPage() { return <ChildShell><Now /></ChildShell>; }
@@ -313,6 +313,7 @@ function Next({ task, onChanged }: { task: Task; onChanged: () => void }) {
   const { settings, profile } = useApp();
   const [blocked, setBlocked] = useState(false);
   const [note, setNote] = useState('');
+  const [busy, run] = useAction();
   if (!settings || !profile) return null;
 
   const left = settings.max_postpones_per_day - task.postpone_count;
@@ -355,16 +356,16 @@ function Next({ task, onChanged }: { task: Task; onChanged: () => void }) {
             </ol>
           )}
 
-          <button onClick={async () => { await A.startTask(task); onChanged(); }}
+          <button onClick={() => run(async () => { await A.startTask(task); await onChanged(); })} disabled={busy}
                   className="btn-leaf btn-lg mt-5 w-full animate-halo">
-            ▶️ Je commence
+            {busy ? '⏳ C’est parti…' : '▶️ Je commence'}
             <span className="ml-1 rounded-full bg-white/25 px-2.5 py-0.5 text-sm">+{task.coins} {settings.currency_emoji}</span>
           </button>
 
           <div className="mt-3 grid grid-cols-2 gap-2.5">
             <button onClick={() => setBlocked(true)} className="btn-plain text-sm">🆘 Je bloque</button>
-            <button disabled={!task.allow_postpone || left <= 0}
-                    onClick={async () => { await A.postponeTask(task, settings); onChanged(); toast(`+${settings.postpone_minutes} min`); }}
+            <button disabled={busy || !task.allow_postpone || left <= 0}
+                    onClick={() => run(async () => { await A.postponeTask(task, settings); await onChanged(); toast(`+${settings.postpone_minutes} min`); })}
                     className="btn-plain text-sm">
               ⏭️ Plus tard · {Math.max(0, left)}
             </button>
@@ -374,12 +375,12 @@ function Next({ task, onChanged }: { task: Task; onChanged: () => void }) {
 
       <Sheet open={blocked} onClose={() => setBlocked(false)} title="Qu’est-ce qui bloque ?"
              footer={
-               <button className="btn-grape btn-lg w-full"
-                       onClick={async () => {
+               <button className="btn-grape btn-lg w-full" disabled={busy}
+                       onClick={() => run(async () => {
                          await A.reportBlocked(task, note, profile.id);
                          setBlocked(false); setNote(''); toast('Message envoyé');
-                       }}>
-                 Envoyer
+                       })}>
+                 {busy ? 'Envoi…' : 'Envoyer'}
                </button>
              }>
         <p className="mb-3 text-sm font-semibold text-muted">Tes parents reçoivent ton message tout de suite.</p>
@@ -395,7 +396,17 @@ function Focus({ task, onDone }: { task: Task; onDone: () => void }) {
   const { settings } = useApp();
   const { seconds, running } = useTaskTimer(task);
   const [finish, setFinish] = useState(false);
+  // Coche immédiate : attendre l'aller-retour serveur (ou le temps réel,
+  // souvent coupé au retour de veille) donnait l'impression d'un tap ignoré.
+  const [ticks, setTicks] = useState<Record<string, boolean>>({});
   if (!settings) return null;
+
+  const isDone = (s: { id: string; done: boolean }) => ticks[s.id] ?? s.done;
+  const tick = async (id: string, done: boolean) => {
+    setTicks((t) => ({ ...t, [id]: done }));
+    try { await A.toggleSubtask(id, done); }
+    catch { setTicks((t) => ({ ...t, [id]: !done })); toast('Pas enregistré, réessaie', 'err'); }
+  };
 
   // Le chrono informe (temps passé, visible du parent) mais ne bloque plus rien.
   const goal = task.duration_min * 60;
@@ -403,7 +414,7 @@ function Focus({ task, onDone }: { task: Task; onDone: () => void }) {
   const pct = Math.min(100, (seconds / goal) * 100);
   const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
   const ss = String(seconds % 60).padStart(2, '0');
-  const doneSubs = task.subtasks?.filter((s) => s.done).length ?? 0;
+  const doneSubs = task.subtasks?.filter(isDone).length ?? 0;
 
   return (
     <>
@@ -436,12 +447,12 @@ function Focus({ task, onDone }: { task: Task; onDone: () => void }) {
             <ul className="space-y-2">
               {task.subtasks.map((s) => (
                 <li key={s.id}>
-                  <button onClick={() => A.toggleSubtask(s.id, !s.done)}
+                  <button onClick={() => tick(s.id, !isDone(s))}
                           className={clsx('flex w-full items-center gap-3 rounded-3xl border-2 px-4 py-3.5 text-left transition no-select active:scale-[.99]',
-                            s.done ? 'border-leaf bg-leaf-light' : 'border-line bg-card')}>
+                            isDone(s) ? 'border-leaf bg-leaf-light' : 'border-line bg-card')}>
                     <span className={clsx('grid h-7 w-7 shrink-0 place-items-center rounded-full border-2 text-sm font-black transition',
-                      s.done ? 'border-leaf bg-leaf text-white' : 'border-line text-transparent')}>✓</span>
-                    <span className={clsx('font-bold', s.done ? 'text-muted line-through' : 'text-ink')}>{s.label}</span>
+                      isDone(s) ? 'border-leaf bg-leaf text-white' : 'border-line text-transparent')}>✓</span>
+                    <span className={clsx('font-bold', isDone(s) ? 'text-muted line-through' : 'text-ink')}>{s.label}</span>
                   </button>
                 </li>
               ))}
@@ -585,6 +596,8 @@ function Queue({ tasks, currentId, onChanged }: { tasks: Task[]; currentId?: str
 /** Choix d'un créneau par l'enfant, en un tap. */
 function PlaceSheet({ task, onClose, onDone }: { task: Task | null; onClose: () => void; onDone: () => void }) {
   const { settings } = useApp();
+  const [busy, run] = useAction();
+  const [picked, setPicked] = useState<number | null>(null);
   if (!task || !settings) return null;
 
   const from = toMinutes(String(settings.day_start).slice(0, 5)) ?? 480;
@@ -599,8 +612,10 @@ function PlaceSheet({ task, onClose, onDone }: { task: Task | null; onClose: () 
       <div className="grid grid-cols-3 gap-2.5">
         {slots.map((m) => (
           <button key={m}
-                  onClick={async () => { await A.scheduleTask(task.id, fromMinutes(m)); onClose(); onDone(); toast(`Placée à ${fromMinutes(m)}`); }}
-                  className="rounded-3xl border-2 border-line bg-card py-4 text-lg font-black text-ink no-select active:scale-95">
+                  disabled={busy}
+                  onClick={() => { setPicked(m); run(async () => { await A.scheduleTask(task.id, fromMinutes(m)); onClose(); onDone(); toast(`Placée à ${fromMinutes(m)}`); }); }}
+                  className={clsx('rounded-3xl border-2 py-4 text-lg font-black no-select active:scale-95',
+                    picked === m && busy ? 'border-grape bg-grape text-white' : 'border-line bg-card text-ink')}>
             {fromMinutes(m)}
           </button>
         ))}
