@@ -25,6 +25,18 @@ export const useApp = () => useContext(AppCtx);
 /** Au-delà de ce délai en arrière-plan, la session parent est fermée. */
 const PARENT_IDLE_MS = 5 * 60 * 1000;
 
+/** Jeton refusé par l'API : expiré, signature invalide, « JWT issued at future »… */
+const isJwtError = (e: { code?: string; message?: string } | null) =>
+  !!e && (/^PGRST30/.test(e.code ?? '') || /jwt/i.test(e.message ?? ''));
+
+/**
+ * Attentes successives quand le jeton est daté dans le futur : l'horloge du
+ * serveur d'authentification avance sur celle de l'API, et le jeton devient
+ * valable dès que l'API a rattrapé ce décalage.
+ */
+const FUTURE_JWT_WAITS = [2000, 4000, 8000, 15000];
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -36,16 +48,37 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const loadAll = useCallback(async (uid: string) => {
     try {
-      const [p, s, subj] = await Promise.all([
+      const fetchCore = () => Promise.all([
         supabase.from('profiles').select('*').eq('id', uid).maybeSingle(),
         supabase.from('settings').select('*').eq('id', 1).maybeSingle(),
         supabase.from('subjects').select('*').eq('active', true).order('position'),
       ]);
+      let [p, s, subj] = await fetchCore();
+
+      // Jeton refusé : sans reprise, l'app restait bloquée sur « JWT issued at
+      // future » jusqu'à une déconnexion manuelle. On demande d'abord un jeton
+      // neuf, puis, s'il est encore daté dans le futur, on laisse à l'horloge
+      // de l'API le temps de rattraper celle du serveur d'authentification.
+      if (isJwtError(p.error ?? s.error ?? subj.error)) {
+        const { data } = await supabase.auth.refreshSession();
+        if (!data.session) return; // jeton de rafraîchissement révoqué : SIGNED_OUT renvoie vers la connexion
+        [p, s, subj] = await fetchCore();
+        for (const wait of FUTURE_JWT_WAITS) {
+          if (!/future/i.test((p.error ?? s.error ?? subj.error)?.message ?? '')) break;
+          await sleep(wait);
+          [p, s, subj] = await fetchCore();
+        }
+      }
 
       // Une erreur ici laissait l'app tourner en boucle sur un écran de
       // chargement : on la remonte pour pouvoir l'afficher.
       const err = p.error ?? s.error ?? subj.error;
-      if (err) { setLoadError(err.message); return; }
+      if (err) {
+        setLoadError(/future/i.test(err.message)
+          ? `L'horloge du serveur Supabase est décalée (${err.message}). Réessaie dans une minute.`
+          : err.message);
+        return;
+      }
       if (!p.data) { setLoadError('Aucun profil associé à ce compte.'); return; }
 
       setLoadError(null);

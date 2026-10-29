@@ -443,8 +443,16 @@ function FinishSheet({ open, onClose, task, onDone }: {
 
   const submit = async () => {
     setBusy(true);
+    let url: string | null = null;
     try {
-      const url = file ? await A.uploadProof(file, profile.id) : null;
+      url = file ? await A.uploadProof(file, profile.id) : null;
+    } catch {
+      // Sans ce message distinct, l'enfant pouvait croire sa photo envoyée.
+      toast('La photo n’est pas partie, réessaie', 'err');
+      setBusy(false);
+      return;
+    }
+    try {
       const res = await A.completeTask(task, settings, profile, { proofUrl: url, note: null, needsValidation: needValid });
       onClose(); setFile(null); setPreview(null);
       onDone(res);

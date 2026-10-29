@@ -8,7 +8,7 @@ import { useApp } from '@/components/AppProvider';
 import { supabase } from '@/lib/supabase';
 import { useDay } from '@/lib/useDay';
 import { useLive } from '@/lib/useLive';
-import { todayISO, hhmm, nowMinutes, toMinutes, longDate } from '@/lib/dates';
+import { todayISO, hhmm, nowMinutes, toMinutes, longDate, relativeDay } from '@/lib/dates';
 import { progressOf, computeAward, levelOf, xpToday } from '@/lib/economy';
 import { settleDay, adjustBalance, elapsedOf, notify } from '@/lib/actions';
 import { KUDOS } from '@/lib/tone';
@@ -30,26 +30,32 @@ function Dashboard() {
   const [wallet, setWallet] = useState(false);
   const [mailbox, setMailbox] = useState(false);
   const [mailboxKey, setMailboxKey] = useState(0);
+  const [submitted, setSubmitted] = useState<Task[]>([]);
+  const [photo, setPhoto] = useState<string | null>(null);
 
   const load = async () => {
     if (!child || !profile) return;
-    const [r, m, mo] = await Promise.all([
+    const [r, m, mo, sub] = await Promise.all([
       supabase.from('redemptions').select('*').eq('child_id', child.id).eq('status', 'pending').order('created_at'),
       supabase.from('messages').select('*').eq('to_id', profile.id).is('read_at', null).order('created_at', { ascending: false }).limit(6),
       // Plusieurs humeurs par jour sont possibles depuis v3 : .maybeSingle() échouait
       // dès qu'il y en avait plus d'une, et l'emoji n'apparaissait plus jamais.
       supabase.from('moods').select('*').eq('child_id', child.id).eq('day', today)
         .order('created_at', { ascending: false }).limit(1),
+      // Tous jours confondus : une tâche envoyée la veille au soir disparaissait
+      // du tableau de bord le lendemain, avec sa photo, sans pouvoir être validée.
+      supabase.from('tasks').select('*').eq('child_id', child.id).eq('status', 'submitted')
+        .order('day').order('completed_at'),
     ]);
     setPending((r.data ?? []) as Redemption[]);
     setMsgs((m.data ?? []) as Message[]);
     setMood(((mo.data as Mood[]) ?? [])[0] ?? null);
+    setSubmitted((sub.data ?? []) as Task[]);
   };
   useEffect(() => { load(); }, [child?.id, profile?.id]);
 
-  useLive(['redemptions', 'messages', 'moods', 'ledger', 'child_items'], load, 'parent-home');
+  useLive(['redemptions', 'messages', 'moods', 'ledger', 'child_items', 'tasks'], load, 'parent-home');
 
-  const submitted = useMemo(() => tasks.filter((t) => t.status === 'submitted'), [tasks]);
   const doing = useMemo(() => tasks.find((t) => t.status === 'doing'), [tasks]);
   const late = useMemo(() => tasks.filter((t) => {
     const m = toMinutes(t.start_time);
@@ -75,7 +81,7 @@ function Dashboard() {
       notify('validation', { taskId: t.id, ok: true, title: t.title, coins: award.coins });
       toast(`+${award.coins} ${settings.currency_emoji}`);
     }
-    await Promise.all([reload(), refreshChild()]);
+    await Promise.all([reload(), load(), refreshChild()]);
   };
 
   const resolve = async (r: Redemption, approve: boolean) => {
@@ -153,6 +159,7 @@ function Dashboard() {
             <div key={t.id} className="card p-4">
               <p className="font-extrabold text-ink">{t.title}</p>
               <p className="mt-1 text-xs font-bold text-muted">
+                {t.day !== today && <span className="capitalize">{relativeDay(t.day)} · </span>}
                 {Math.round(elapsedOf(t) / 60)} min travaillées
               </p>
               {t.proof_url && <img src={t.proof_url} alt="" className="mt-3 max-h-64 w-full rounded-3xl bg-soft object-contain" />}
@@ -204,6 +211,11 @@ function Dashboard() {
               <li key={t.id} className="card flex items-center gap-3 px-4 py-3">
                 <span className="w-12 shrink-0 text-sm font-black tabular-nums text-ink">{t.start_time ? hhmm(t.start_time) : '—'}</span>
                 <span className={clsx('flex-1 truncate font-bold text-ink', t.status === 'done' && 'text-muted line-through')}>{t.title}</span>
+                {/* Seul accès à la photo d'une tâche validée sans passer par « À valider ». */}
+                {t.proof_url && (
+                  <button onClick={() => setPhoto(t.proof_url)} aria-label="Voir la photo"
+                          className="grid h-9 w-9 shrink-0 place-items-center rounded-2xl bg-grape-light text-lg no-select active:scale-90">📷</button>
+                )}
                 <span className="shrink-0 text-xl">
                   {t.status === 'done' ? '✅' : t.status === 'doing' ? '▶️' : t.status === 'submitted' ? '⏳' : '⬜'}
                 </span>
@@ -224,6 +236,9 @@ function Dashboard() {
       <KudosSheet open={kudos} onClose={() => setKudos(false)} />
       <WalletSheet open={wallet} onClose={() => setWallet(false)} />
       <MessageSheet open={mailbox} onClose={() => setMailbox(false)} onSent={() => setMailboxKey((k) => k + 1)} />
+      <Sheet open={!!photo} onClose={() => setPhoto(null)} title="📷 Photo envoyée">
+        {photo && <img src={photo} alt="" className="w-full rounded-3xl bg-soft object-contain" />}
+      </Sheet>
     </main>
   );
 }

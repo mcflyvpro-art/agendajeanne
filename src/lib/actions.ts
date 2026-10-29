@@ -2,6 +2,7 @@
 import { supabase } from '@/lib/supabase';
 import { computeAward, dayIsComplete, badgesToUnlock, levelOf } from '@/lib/economy';
 import { todayISO, addDaysISO, toMinutes, nowMinutes, fromMinutes } from '@/lib/dates';
+import { compressToJpeg } from '@/lib/image';
 import type { Profile, Settings, Task } from '@/lib/types';
 
 /** Envoie une notification à l'autre membre de la famille. Ne bloque jamais l'action. */
@@ -101,7 +102,9 @@ export async function completeTask(
   };
 
   if (opts.needsValidation) {
-    await supabase.from('tasks').update({ ...base, status: 'submitted' }).eq('id', task.id);
+    // Erreur remontée : ignorée, l'enfant voyait « envoyé » alors que rien n'était parti.
+    const { error } = await supabase.from('tasks').update({ ...base, status: 'submitted' }).eq('id', task.id);
+    if (error) throw error;
     await notify('task_submitted', { taskId: task.id });
     return null;
   }
@@ -113,10 +116,11 @@ export async function completeTask(
   })();
 
   const award = computeAward(s, task, { onTime, streak: child.streak_current });
-  await supabase.from('tasks').update({
+  const { error } = await supabase.from('tasks').update({
     ...base, status: 'done', validated_at: now.toISOString(),
     coins_awarded: award.coins, xp_awarded: award.xp,
   }).eq('id', task.id);
+  if (error) throw error;
 
   const extra = await settleDay(task, s, child, award.coins, award.xp, `Tâche : ${task.title}`, task.id);
   return { ...award, ...extra };
@@ -246,11 +250,17 @@ export async function adjustBalance(child: Profile, amount: number, reason: stri
   });
 }
 
-/** Téléverse une photo de preuve dans le bucket public `proofs`. */
+/**
+ * Téléverse une photo de preuve dans le bucket public `proofs`.
+ * Une photo d'iPhone pèse 3 à 5 Mo : réduite à 1600 px elle part en quelques
+ * centaines de Ko, ce qui fiabilise l'envoi en 4G et l'affichage côté parent.
+ */
 export async function uploadProof(file: File, childId: string): Promise<string> {
-  const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+  const jpeg = await compressToJpeg(file).catch(() => null);
+  const ext = jpeg ? 'jpg' : file.name.split('.').pop()?.toLowerCase() || 'jpg';
   const path = `${childId}/${Date.now()}.${ext}`;
-  const { error } = await supabase.storage.from('proofs').upload(path, file, { upsert: true, contentType: file.type });
+  const { error } = await supabase.storage.from('proofs')
+    .upload(path, jpeg ?? file, { upsert: true, contentType: jpeg ? 'image/jpeg' : file.type });
   if (error) throw error;
   return supabase.storage.from('proofs').getPublicUrl(path).data.publicUrl;
 }
